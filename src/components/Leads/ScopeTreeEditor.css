@@ -1,0 +1,119 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   ScopeTreeEditor — the additions that turn the flat sub-item table into a tree.
+
+   Loaded ALONGSIDE ScopeSubItemsEditor.css, not instead of it: every shared cell,
+   input and total style still comes from there, and this file adds only what
+   depth needs (indentation, the row controls, the collapsed/branch rows). Keeping
+   the split means the base table can change once and both look right.
+
+   App theme convention: --c-<hex> / --ct-<hex> tokens from theme.css, keyed by
+   their LIGHT-mode hex value (e.g. --c-e5e7eb, --ct-374151) — not semantic
+   aliases like --c-border/--c-surface/--ct-body/--ct-accent, which don't exist
+   there and were silently falling back to their literal defaults in every
+   theme, dark mode included. That was a real bug here, not just a colour
+   preference: fixed throughout this file to the numeric tokens
+   ScopeSubItemsEditor.css already uses correctly.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* The numbering cell carries the indent, the elbow and the chevron, so depth
+   reads down the first column rather than from nested tables. */
+.ssi-tree-no {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ssi-tree-elbow {
+  color: var(--ct-6b7280, #6b7280);
+  flex: none;
+}
+
+/* Keeps a leaf's number aligned with the numbers of its siblings that do have a
+   chevron — without it every leaf shifts left and the column looks ragged. */
+.ssi-tree-spacer {
+  display: inline-block;
+  width: 18px;
+  flex: none;
+}
+
+/* A child row sits on a faintly recessed ground so a deep branch stays legible
+   as one block. Deliberately subtle: at four levels a stronger tint would stack
+   into stripes that read as an error state. */
+.ssi-tr--child > td {
+  background: var(--c-f3f4f6, #f3f4f6);
+}
+[data-theme="dark"] .ssi-tr--child > td { background: rgba(148, 163, 184, 0.06); }
+
+.ssi-tree-acts {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.ssi-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 6px;
+  font-size: 11px;
+  line-height: 1;
+  border: 1px solid var(--c-e5e7eb, #e5e7eb);
+  border-radius: 4px;
+  background: var(--c-fff, #fff);
+  color: var(--ct-374151, #374151);
+  cursor: pointer;
+}
+
+.ssi-iconbtn:hover:not(:disabled) {
+  background: var(--c-f0f4fb, #f0f4fb);
+  border-color: var(--c-1b3a6b, #1b3a6b);
+}
+
+.ssi-iconbtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* "+ Sub" is the control that makes nesting discoverable, so it is the one row
+   action that carries a label rather than only an icon. */
+.ssi-iconbtn--sub {
+  font-weight: 600;
+  color: var(--ct-1b3a6b, #1b3a6b);
+  border-color: var(--c-bfdbfe, #bfdbfe);
+}
+
+.ssi-tree-collapsed,
+.ssi-tree-groupfoot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--ct-374151, #374151);
+}
+
+.ssi-tree-groupfoot {
+  border-top: 1px dashed var(--c-e5e7eb, #e5e7eb);
+  margin-top: 2px;
+}
+
+/* Reuses the error colour of the top-level total, so "this group is wrong" looks
+   the same wherever in the tree it appears. */
+.ssi-tree-groupfoot.ssi-total--err .ssi-hint {
+  color: var(--ct-dc2626, #dc2626);
+}
+
+/* Wide enough that a leaf's two date/period fields, a status select and the
+   progress figures all sit on one line without wrapping — an explicit
+   min-width, not a hope that the modal is wide enough, because table auto
+   layout will otherwise shrink this column first and every row wraps at a
+   different point, which is what broke row-to-row alignment in the first
+   place: a wrapped row is taller and its second line restarts at the left
+   edge instead of lining up with the row below. */
+.ssi-c-extra {
+  white-space: nowrap;
+  min-width: 460px;
+}

@@ -83,6 +83,50 @@
 /* Tables */
 .obd-table-wrap { overflow-x: auto; }
 .obd-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+/* ── Scope table: pinned header, sized by the page shell — not its own guess ──
+   Opt-in via a MODIFIER rather than by changing .obd-table-wrap itself, which is
+   used by ten tables across every tab of this file (BOM, progress, commercial,
+   items…). Capping all of them to fix one would silently reshape nine screens
+   that nobody complained about.
+
+   Applied to the phase/scope table. .pd-page (Projects.css) is ALREADY a
+   fixed-height flex shell whose one scrolling pane is .obd-tab-body — this table
+   used to fight that with its own independent overflow:auto plus a guessed
+   calc(100vh - 320px), which is exactly why it looked short with a scrollbar of
+   its own sitting inside an otherwise mostly-empty pane: two scroll containers
+   nested, the inner one capped at a number with no relation to the space actually
+   free. No overflow/height rule here now — the table flows at its natural height
+   inside .obd-tab-body, the real (and correctly sized) scrolling ancestor. Only
+   the pinned header below still needs this modifier. */
+.obd-table-wrap--sticky {
+  overflow: visible;
+}
+
+/* `>` is load-bearing: the breakdown editor renders its own <table> inside a cell
+   of this one, so a descendant selector would pin every sub-table header too. */
+.obd-table-wrap--sticky > .obd-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.obd-table-wrap--sticky > .obd-table > thead > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* Opaque — rows scroll UNDER this. */
+  background: var(--c-fff, #fff);
+}
+
+/* .pd-page's own short-viewport fallback (Projects.css) drops .obd-tab-body back
+   to a plain document-scrolling block, at which point this thead's `top: 0`
+   would resolve against the DOCUMENT instead of .obd-tab-body and sit flush under
+   the fixed navbar — visually hidden behind it. Match .pd-page's own retreat:
+   no sticky chrome on a short screen, same as everywhere else on that fallback. */
+@media (max-width: 768px), (max-height: 620px) {
+  .obd-table-wrap--sticky > .obd-table > thead > tr > th {
+    position: static;
+  }
+}
 .obd-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; color: var(--text-tertiary, #94a3b8); padding: 8px 10px; border-bottom: 1px solid var(--border-color, #e2e8f0); white-space: nowrap; }
 .obd-table td { padding: 8px 10px; border-bottom: 1px solid var(--border-light, #f1f5f9); vertical-align: middle; }
 .obd-table tfoot td { border-bottom: none; padding-top: 12px; }
@@ -581,3 +625,30 @@
 .obd-mtl-flag em { font-style: normal; font-weight: 500; font-size: 9px; color: var(--text-tertiary, #94a3b8); max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
 [data-theme="dark"] .obd-mtl-flag { background: #1e293b; border-color: #334155; color: #e2e8f0; }
 [data-theme="dark"] .obd-mtl-flag em { color: #94a3b8; }
+/* ── Per-node schedule cell (scope tree) ─────────────────────────────────────
+   The extra cell the scope tree's renderExtra fills: schedule controls, status,
+   then progress. Wraps rather than scrolling, because at depth the row is already
+   indented and a horizontal scrollbar inside one cell is unusable. */
+.obd-sched-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.obd-sched {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* The Weekly/Monthly choice, shrunk to "W"/"M" so it fits on a nested row beside
+   two date inputs. Same component as the header's Schedule Granularity toggle —
+   .obd-unit-toggle supplies the frame, this only tightens it. */
+.obd-unit-toggle--xs button {
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 22px;
+}

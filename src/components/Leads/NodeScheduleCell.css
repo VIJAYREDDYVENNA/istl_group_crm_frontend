@@ -1,0 +1,71 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   NodeScheduleCell — layout only.
+
+   Deliberately namespace-neutral (`sched-*`): the inputs themselves take the host
+   page's own classes via the `cls` prop (`obd-inp` / `lts-inp`), so each screen
+   keeps its own field styling and the two never borrow each other's. This file
+   only arranges them. See the ld-/custd- CSS namespace split note.
+
+   Uses the numeric --c-<hex>/--ct-<hex> tokens from theme.css (the ones every
+   other scope-tree stylesheet uses) — NOT semantic aliases like --c-border/
+   --c-surface/--ct-body/--c-accent, which don't exist there and were silently
+   falling back to their literal defaults in every theme, dark mode included.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.sched-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* A safety net for a narrow viewport, not the normal case: the modal this now
+     lives in is wide enough that these controls sit on one line. Wrapping only
+     when genuinely out of room is what keeps rows lining up with each other. */
+  flex-wrap: wrap;
+}
+
+/* Date inputs and period selects, sized to sit comfortably next to each other
+   without crowding — the modal that hosts this has the width for it now. */
+.sched-cell input[type="date"],
+.sched-cell select {
+  width: auto;
+  min-width: 132px;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
+/* The Weekly/Monthly choice, shrunk to W/M so it fits beside two date inputs.
+   Mirrors the header's Schedule Granularity toggle. */
+.sched-unit {
+  display: inline-flex;
+  border: 1px solid var(--c-e5e7eb, #e5e7eb);
+  border-radius: 6px;
+  overflow: hidden;
+  flex: none;
+}
+
+.sched-unit button {
+  border: none;
+  background: var(--c-fff, #fff);
+  color: var(--ct-374151, #374151);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 24px;
+  cursor: pointer;
+}
+
+.sched-unit button + button { border-left: 1px solid var(--c-e5e7eb, #e5e7eb); }
+.sched-unit button:hover { background: var(--c-f3f4f6, #f3f4f6); }
+
+.sched-unit button.active {
+  background: var(--c-1b3a6b, #1b3a6b);
+  color: #fff;
+}
+
+/* The resolved date range / duration — information the user reads to confirm
+   their schedule, not a decorative hint, so it gets real body-text contrast
+   rather than the host's near-invisible "faint" colour. */
+.sched-faint {
+  font-size: 12px;
+  color: var(--ct-374151, #374151);
+  white-space: nowrap;
+}

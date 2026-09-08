@@ -7,31 +7,42 @@
 //    work, technical notes). Group / Sub-group shown read-only from the lead.
 //    "Pull from site visit" fills location/capacity from the site visit report.
 //  • Section B: the scope of work — WHICH activities we will do, chosen from a
-//    dropdown, each optionally broken down into standardised sub-items.
-//    Still deliberately NO dates, NO prices: scheduling belongs to the project
-//    once the lead is won, materials belong to the BOM tab, and money belongs to
-//    Budget Estimation.
+//    dropdown, each optionally broken down into a TREE of sub-items of any depth.
+//    Scheduling now lives here too: an activity (or any node under it) can carry a
+//    span, and a node WITH a breakdown also picks Weekly or Monthly, which divides
+//    its span into the periods its own children are scheduled against. This
+//    REVERSES the tab's original "deliberately no dates" rule — a lead is quoted
+//    against a programme, so the programme is now built here and carried into the
+//    project rather than retyped. Prices are still out of scope: materials belong
+//    to the BOM tab and money to Budget Estimation.
 //
-//    Sub-items arrive from the active template via Suggest and are editable
-//    afterwards. Their weights are a share of their OWN parent activity (100%
-//    within it), never of the whole scope — see utils/scopeWeights.js. A
-//    sub-item's NAME is its identity once the lead becomes a project (planned
-//    budgets and weekly progress key off it), which is why names are picked from
-//    the shared list rather than typed freehand.
+//    The breakdown arrives from the active template via Suggest, at full depth,
+//    and is editable afterwards. Each node's weight is a share of its OWN parent
+//    (100% within it), never of the whole scope, at every level.
+//
+//    A node's identity is its `id`, not its name: it keeps that UUID through
+//    renames and through the copy into a project, and progress and budget hang off
+//    it. So renaming a node is safe, and two nodes that share a name in different
+//    branches stay separate. Names are still picked from the shared list, now for
+//    consistency across proposals rather than because anything keys off them.
+//    See utils/scopeTree.js.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useEffect, useCallback } from "react";
 import './LeadCardHead.css';
 import {
-  Wand2, Plus, Save, Trash2, Download, ClipboardList, ListChecks, CornerDownRight,
+  Wand2, Plus, Save, Trash2, Download, ClipboardList, ListChecks, CornerDownRight, Maximize2,
 } from "lucide-react";
 import api from "../../services/leadsapi.js";
 import ConfirmationModal from "../ConfirmationModal.js";
 import useConfirmationModal from "../HandleConfirmationModal.js";
 import { useActivityNames } from "./ActivityNameSelect.js";
-import ScopeSubItemsEditor, {
-  SubItemsSummary, SubItemsToggle, hydrateSubs, subsForSave, namedSubs,
-} from "./ScopeSubItemsEditor.js";
-import { validateWeights } from "../../utils/scopeWeights.js";
+import { SubItemsSummary } from "./ScopeTreeEditor.js";
+import ScopeBreakdownModal from "./ScopeBreakdownModal.js";
+import {
+  blankNode, hydrateTree, treeForSave, mergeTree, validateTree,
+} from "../../utils/scopeTree.js";
+import NodeScheduleCell from "./NodeScheduleCell.js";
+import { nodeGrid, validateSchedule } from "../../utils/scopeSchedule.js";
 import {
   DEFAULT_EPC_SCOPE, UNIT_SUGGESTIONS, OTHER_OPTION, SUGGESTION_WARNING_LABELS,
 } from "../../constants/scopeActivities.js";
@@ -45,8 +56,23 @@ const emptyHeader = {
   technicalNotes: "",
 };
 
+/**
+ * Set one field on the node with this id, wherever it sits in the tree.
+ *
+ * Addressed by ID, not by index: the schedule cell is rendered by the recursive
+ * editor, which knows the node but not the path back to the activity — and an index
+ * would be wrong the moment a branch above it was reordered.
+ */
+const setNodeFieldById = (nodes, id, key, value) => (nodes || []).map((n) => (
+  n.id === id
+    ? { ...n, [key]: value }
+    : { ...n, children: setNodeFieldById(n.children, id, key, value) }
+));
+
 const blankRow = () => ({
   id: null, activity: "", specification: "", quantity: "", unit: "kW", customName: false,
+  // An activity's own span, and how it divides for the items under it.
+  plannedStartDate: "", plannedEndDate: "", planUnit: "",
   // Second-level breakdown. Empty = this activity is not broken down, the normal
   // case; sub-items are opt-in per line.
   subItems: [],
@@ -122,8 +148,11 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
           specification: it.specification || "",
           quantity: it.quantity ?? "",
           unit: it.unit || "",
+          plannedStartDate: it.plannedStartDate || "",
+          plannedEndDate: it.plannedEndDate || "",
+          planUnit: it.planUnit || "",
           customName: false, // resolved against the dropdown at render time
-          subItems: hydrateSubs(it.subItems),
+          subItems: hydrateTree(it.subItems),
         })));
       }
     } catch (e) {
@@ -192,13 +221,15 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
 
   const addRow = () => setRows(prev => [...prev, blankRow()]);
 
-  // Which rows have their breakdown open. UI-only, keyed by row index — the list
-  // is only reordered by add/remove, which re-renders the whole table anyway.
-  const [expanded, setExpanded] = useState({});
-  const toggleExpanded = (i) => setExpanded(e => ({ ...e, [i]: !e[i] }));
+  // Which row's breakdown is open, in ScopeBreakdownModal — a row INDEX, or
+  // null. Replaces the old per-row inline expand: a deep tree rendered as
+  // extra <tr>s under the activity row (in the same table) is exactly what
+  // made this table congested. Only one breakdown is viewable at a time now,
+  // which the modal makes the natural shape rather than a loss.
+  const [openBreakdown, setOpenBreakdown] = useState(null);
   const setSubs = (i, next) => {
     updateRow(i, "subItems", next);
-    if (next.length) setExpanded(e => ({ ...e, [i]: true }));
+    if (next.length) setOpenBreakdown(i);
   };
 
   const removeRow = (i) => { setFocusRow(null); setRows(prev => prev.filter((_, idx) => idx !== i)); };
@@ -241,20 +272,12 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
     });
   };
 
-  // Same rule one level down, mirroring the server's ScopeSubItems.merge…().
-  const mergeSubs = (prior, incoming) => {
-    const inc = incoming || [];
-    if (!inc.length) return [];
-    const byKey = new Map();
-    (prior || []).forEach((si) => {
-      const k = nameKey(si.name);
-      if (k && !byKey.has(k)) byKey.set(k, si);
-    });
-    return hydrateSubs(inc.map((si) => {
-      const was = byKey.get(nameKey(si.name));
-      return was ? { ...si, name: was.name, description: si.description || was.description } : si;
-    }));
-  };
+  // The same rule all the way DOWN THE TREE, mirroring the server's
+  // ScopeSubItems.mergePreservingExecutionData. It matches within each parent and
+  // then recurses: matching globally by name would pair the "Excavation" under
+  // Civil with the one under Substation, which is exactly what nesting makes
+  // possible. See utils/scopeTree.js.
+  const mergeSubs = (prior, incoming) => mergeTree(prior, incoming);
 
   const suggestEpcScope = async () => {
     if (rows.length) {
@@ -297,7 +320,7 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
         specification: it.specification || "",
         quantity: it.quantity ?? "",
         unit: it.unit || "",
-        subItems: hydrateSubs(it.subItems),
+        subItems: hydrateTree(it.subItems),
       }))));
       setSuggestNote({ source: d.source, sourceCapacity: d.sourceCapacity, warnings: d.warnings || [] });
       showSuccess?.(
@@ -314,16 +337,16 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
     if (!canEdit) return;
     for (const r of rows) {
       if (!(r.activity || "").trim()) { showError?.("Every scope line needs an activity"); return; }
-      // Each breakdown is its own 100%, checked per parent so the message can name
-      // the activity to go and fix. Re-checked server-side.
-      const named = namedSubs(r.subItems);
-      if (named.length) {
-        const check = validateWeights(named, (si) => si.name.trim());
-        if (!check.ok) {
-          showError?.(`Under "${r.activity.trim()}": ${check.error.replace(/^Scope weights/, "Sub-item weights")}`);
-          return;
-        }
-      }
+      // Every group in the tree is its own 100%, checked per parent AT EVERY LEVEL
+      // so the message names the exact branch to go and fix — with several levels,
+      // "the weights are wrong" is unusable. Re-checked server-side.
+      const check = validateTree(r.subItems, r.activity.trim());
+      if (!check.ok) { showError?.(check.error); return; }
+      // Dates and periods, per parent, at every level. The grid a line's children
+      // sit on is the line's own span; nodeGrid returns null until it has one, and
+      // then only end-before-start is checked.
+      const sched = validateSchedule(r.subItems, nodeGrid(r), r.activity.trim());
+      if (!sched.ok) { showError?.(sched.error); return; }
     }
     setSavingRows(true);
     try {
@@ -335,7 +358,10 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
           specification: (r.specification || "").trim() || null,
           quantity: r.quantity === "" || r.quantity == null ? null : Number(r.quantity),
           unit: (r.unit || "").trim() || null,
-          subItems: subsForSave(r.subItems),
+          plannedStartDate: r.plannedStartDate || null,
+          plannedEndDate: r.plannedEndDate || null,
+          planUnit: r.planUnit || null,
+          subItems: treeForSave(r.subItems),
         })),
       });
       if (res?.success) {
@@ -464,13 +490,14 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
                 <th>Description</th>
                 <th className="lts-col-qty">Qty</th>
                 <th className="lts-col-unit">Unit</th>
+                <th className="lts-col-sched">Schedule</th>
                 {canEdit && <th className="lts-col-act" />}
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={canEdit ? 6 : 5} className="lts-empty">
+                  <td colSpan={canEdit ? 7 : 6} className="lts-empty">
                     No scope lines yet. Use "Suggest EPC scope" or "Add row" to begin.
                   </td>
                 </tr>
@@ -481,15 +508,21 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
                 // it's offered as its own option rather than dumped into free text.
                 const known = activityOptions.includes(row.activity);
                 const subs = row.subItems || [];
-                const open = !!expanded[i];
-                const cols = canEdit ? 6 : 5;
+                const cols = canEdit ? 7 : 6;
                 return (
                   <React.Fragment key={row.id ?? `new-${i}`}>
                   <tr className={subs.length ? "lts-row--parent" : undefined}>
                     <td className="lts-col-num">
-                      {/* The toggle sits on the row number so a broken-down activity
-                          reads as a heading, not as another leaf row. */}
-                      <SubItemsToggle open={open} count={subs.length} onToggle={() => toggleExpanded(i)} />
+                      {/* Opens the breakdown in its own dialog, rather than
+                          expanding it inline under this row. Sits on the row
+                          number so a broken-down activity still reads as a
+                          heading, not as another leaf row. Clickable even with
+                          no sub-items yet — that's also how one gets added. */}
+                      <button type="button" className="lts-icon-add" style={{ marginRight: 2 }}
+                        title={subs.length ? "View / edit breakdown" : "Add a breakdown"}
+                        onClick={() => setOpenBreakdown(i)}>
+                        <Maximize2 size={12} />
+                      </button>
                       {i + 1}
                     </td>
                     <td>
@@ -537,10 +570,18 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
                         {UNIT_SUGGESTIONS.map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
                     </td>
+                    <td className="lts-col-sched">
+                      {/* An activity with a breakdown defines the period grid its
+                          sub-items are scheduled on; one without takes plain dates. */}
+                      <NodeScheduleCell
+                        node={row} hasKids={subs.length > 0} grid={null} cls="lts"
+                        disabled={!canEdit}
+                        write={(k, v) => updateRow(i, k, v)} />
+                    </td>
                     {canEdit && (
                       <td className="lts-col-act">
                         <button className="lts-icon-add" title="Add a sub-item under this activity"
-                          onClick={() => setSubs(i, [...subs, { name: "", description: "", unit: "", weightPct: "", weightManual: false }])}>
+                          onClick={() => setSubs(i, [...subs, blankNode()])}>
                           <CornerDownRight size={14} />
                         </button>
                         <button className="lts-icon-del" title="Remove row" onClick={() => removeRow(i)}>
@@ -550,29 +591,14 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
                     )}
                   </tr>
 
-                  {/* Collapsed: one line naming what is inside. Without it a closed
-                      breakdown looks identical to one that was never created. */}
-                  {!open && subs.length > 0 && (
+                  {/* One line naming what is inside — the breakdown now always
+                      opens in its own dialog rather than inline, so this is
+                      the only place a closed activity shows what's under it. */}
+                  {subs.length > 0 && (
                     <tr className="lts-row--sub">
                       <td />
                       <td colSpan={cols - 1}>
-                        <SubItemsSummary subs={subs} onExpand={() => toggleExpanded(i)} />
-                      </td>
-                    </tr>
-                  )}
-
-                  {open && (
-                    <tr className="lts-row--sub">
-                      <td />
-                      <td colSpan={cols - 1}>
-                        <ScopeSubItemsEditor
-                          subs={subs}
-                          onChange={(next) => updateRow(i, "subItems", next)}
-                          parentName={row.activity}
-                          options={activityOptions}
-                          register={registerActivity}
-                          disabled={!canEdit}
-                        />
+                        <SubItemsSummary subs={subs} onExpand={() => setOpenBreakdown(i)} />
                       </td>
                     </tr>
                   )}
@@ -583,6 +609,42 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
           </table>
         </div>
 
+        {/* The breakdown TREE, in its own dialog — was extra <tr>s squeezed
+            under the activity row in this same table, which is exactly what
+            made a broken-down activity look congested. ScopeTreeEditor's own
+            chevrons/indentation are unchanged; only where they render moved. */}
+        {openBreakdown != null && rows[openBreakdown] && (() => {
+          const i = openBreakdown;
+          const row = rows[i];
+          const subs = row.subItems || [];
+          return (
+            <ScopeBreakdownModal
+              open
+              parentName={row.activity}
+              subs={subs}
+              onChange={(next) => updateRow(i, "subItems", next)}
+              options={activityOptions}
+              register={registerActivity}
+              disabled={!canEdit}
+              onClose={() => setOpenBreakdown(null)}
+              renderExtra={(node, ctx) => (
+                <NodeScheduleCell
+                  node={node}
+                  hasKids={(node.children || []).length > 0}
+                  // The grid this node sits ON: its parent's own span when the
+                  // parent has one, else the activity's. Null until something
+                  // above it is scheduled, which falls back to plain date
+                  // pickers rather than an empty period list.
+                  grid={ctx.parent ? nodeGrid(ctx.parent) : nodeGrid(row)}
+                  cls="lts"
+                  disabled={!canEdit}
+                  write={(k, v) => updateRow(i, "subItems",
+                    setNodeFieldById(subs, node.id, k, v))} />
+              )}
+            />
+          );
+        })()}
+
         {canEdit && (
           <div className="lts-card-foot">
             <button className="lts-btn-primary" onClick={saveRows} disabled={savingRows}>
@@ -592,7 +654,9 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
         )}
 
         <p className="lts-hint">
-          What we will do — no dates or costs here. Materials for this scope are prepared in the BOM tab,
+          What we will do, and when. An activity with a breakdown sets its own span and whether it
+          divides into weeks or months; the items under it are scheduled in those periods. No costs
+          here — materials for this scope are prepared in the BOM tab,
           and priced in Budget Estimation.
         </p>
       </div>

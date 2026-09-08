@@ -25,6 +25,11 @@ import { BASIS_OPTIONS, SITE_VISIT_FIELDS } from "../constants/scopeActivities.j
 import {
   distributeWeights, resetWeights, setWeightAt, validateWeights, weightSum, fmtWeight,
 } from "../utils/scopeWeights.js";
+import ScopeTreeEditor from "../components/Leads/ScopeTreeEditor.js";
+import {
+  blankNode, namedNodes, treeWeightsOk, hydrateTree, treeForSave, validateTree,
+  flatten, countDescendants,
+} from "../utils/scopeTree.js";
 import "../pages-css/LeadTemplatesAdmin.css";
 
 const GENERAL = "__general__"; // section key for BOM lines with no scope activity
@@ -79,10 +84,13 @@ const blankScope = () => ({
 });
 
 // A sub-item carries only what a TEMPLATE can know. The execution fields a
-// project phase's sub-item also has (status, progress, dates) are deliberately
+// project phase's node also has (status, progress, dates) are deliberately
 // absent: a template describes work, not a run of it, and inventing "Not
 // Started" here would put a fake progress record in every generated project.
-const blankSubItem = () => ({ name: "", description: "", unit: "", weightPct: "", weightManual: false });
+//
+// blankNode() (utils/scopeTree.js) is the one constructor, shared with the lead
+// and project screens. It also mints the node's id, which is what the breakdown
+// is keyed by from here on — the name is only a label.
 const blankBom = (scopeActivity = "") => ({
   _key: `n${Math.random().toString(36).slice(2)}`, // stable local key for grouping
   id: null, scopeActivity, category: "", itemName: "", make: "", specification: "",
@@ -232,15 +240,12 @@ export default function LeadTemplatesAdmin() {
         specification: s.specification || "", unit: s.unit || "", notes: s.notes || "",
         weightPct: s.weightPct != null ? Number(s.weightPct) : "",
         weightManual: s.weightManual === true,
-        // Balanced on open the same way the parents are, so a breakdown saved
-        // before this editor existed (the column was dormant storage) still
-        // shows a sensible 100%.
-        subItems: distributeWeights((s.subItems || []).map(si => ({
-          ...blankSubItem(),
-          name: si.name || "", description: si.description || "", unit: si.unit || "",
-          weightPct: si.weightPct != null ? Number(si.weightPct) : "",
-          weightManual: si.weightManual === true,
-        }))),
+        // Balanced on open the same way the parents are, at every level, so a
+        // breakdown saved before this editor existed (the column was dormant
+        // storage) still shows a sensible 100%. hydrateTree also gives an id to
+        // any node that arrived without one, so pre-migration rows become
+        // id-keyed the first time they are saved.
+        subItems: hydrateTree(s.subItems),
       }))));
       setBomLines((t.bomItems || []).map(b => ({
         ...blankBom(b.scopeActivity || ""),
@@ -312,11 +317,19 @@ export default function LeadTemplatesAdmin() {
   // a wrong total would otherwise be unrecoverable from the screen.
   const resetScopeWeights = () => setScopeLines(p => resetWeights(p));
 
-  // ── Sub-items: the second level under a scope line ──────────────────────────
-  // A breakdown is its own weight group summing to 100% of ITS PARENT, using the
-  // same helpers as the parents (utils/scopeWeights) rather than a second set of
-  // rules — so pinning, rebalancing and the rounding tolerance behave identically
-  // at both levels, and the server can enforce one model.
+  // ── Sub-items: the breakdown TREE under a scope line ────────────────────────
+  // Every group in the tree is its own weight group summing to 100% of ITS OWN
+  // PARENT, at every level, using the same helpers as the parents
+  // (utils/scopeWeights via utils/scopeTree) rather than a second set of rules —
+  // so pinning, rebalancing and the rounding tolerance behave identically at every
+  // depth, and the server can enforce one model.
+  //
+  // The table itself is now ScopeTreeEditor, shared with the lead tab and the
+  // project scope tab. This page used to carry its own inline copy of it in the
+  // `lta-*` namespace; three hand-maintained copies of a recursive editor would
+  // have been three sets of nesting bugs, so the copy was dropped in favour of the
+  // shared component. The Excel import/export is still wired around this page.
+  //
   // Which rows have their breakdown open. UI-only, keyed by row index — the list
   // is only reordered by add/remove, which re-renders the whole table anyway.
   const [expanded, setExpanded] = useState({});
@@ -327,21 +340,13 @@ export default function LeadTemplatesAdmin() {
   const subsOf = (i) => scopeLines[i].subItems || [];
 
   const addSubItem = (i) => {
-    updSubs(i, distributeWeights([...subsOf(i), blankSubItem()]));
+    updSubs(i, distributeWeights([...subsOf(i), blankNode()]));
     setExpanded(e => ({ ...e, [i]: true }));
   };
-  const rmSubItem = (i, j) =>
-    updSubs(i, distributeWeights(subsOf(i).filter((_, idx) => idx !== j)));
-  const updSubItem = (i, j, k, v) =>
-    updSubs(i, subsOf(i).map((si, idx) => (idx === j ? { ...si, [k]: v } : si)));
-  const setSubWeight = (i, j, raw) => updSubs(i, setWeightAt(subsOf(i), j, raw));
-  const resetSubWeights = (i) => updSubs(i, resetWeights(subsOf(i)));
 
-  const namedSubs = (r) => (r.subItems || []).filter(si => (si.name || "").trim());
-  const subWeightsOk = (r) => {
-    const subs = namedSubs(r);
-    return subs.length === 0 || validateWeights(subs, si => si.name).ok;
-  };
+  const namedSubs = (r) => namedNodes(r.subItems);
+  /** True when this line's whole breakdown adds up, at every level. */
+  const subWeightsOk = (r) => treeWeightsOk(r.subItems);
 
   // ── Scope Excel: blank template / export / import ───────────────────────────
   // Import REPLACES the whole list rather than appending, because a scope is a
@@ -371,14 +376,17 @@ export default function LeadTemplatesAdmin() {
 
   const applyScopeImport = () => {
     if (!scopePreview) return;
-    // Balance both levels on the way in, so a file with no weights at all lands
-    // on a valid 100% instead of showing the user an error they did not cause.
+    // Balance EVERY level on the way in, so a file with no weights at all lands on
+    // a valid 100% per parent instead of showing the user an error they did not
+    // cause. hydrateTree recurses; distributeWeights alone only balanced the top
+    // group, which left every level-3 branch at 0% straight after an import.
     const lines = distributeWeights(scopePreview.lines).map(r => ({
-      ...r, subItems: distributeWeights(r.subItems || []),
+      ...r, subItems: hydrateTree(r.subItems || []),
     }));
     setScopeLines(lines);
     setExpanded({});
-    const subCount = lines.reduce((n, r) => n + (r.subItems || []).length, 0);
+    const subCount = lines.reduce(
+      (n, r) => n + (r.subItems || []).reduce((m, si) => m + 1 + countDescendants(si), 0), 0);
     setScopePreview(null);
     showSuccess(`Imported ${lines.length} activit${lines.length === 1 ? "y" : "ies"}`
       + `${subCount ? ` and ${subCount} sub-item${subCount === 1 ? "" : "s"}` : ""}. `
@@ -395,16 +403,12 @@ export default function LeadTemplatesAdmin() {
     // drift that retyping the displayed values causes. Re-checked server-side.
     const check = validateWeights(scopeLines, r => r.activity.trim());
     if (!check.ok) { showError(check.error); return; }
-    // Each breakdown is its own 100%, checked per parent so the message can name
-    // the activity to go and fix rather than just "the sub-items".
+    // Every group in the breakdown is its own 100%, checked per parent AT EVERY
+    // LEVEL so the message names the exact branch to go and fix — with a deep
+    // tree, "the sub-items are wrong" gives the user nothing to act on.
     for (const r of scopeLines) {
-      const subs = (r.subItems || []).filter(si => (si.name || "").trim());
-      if (!subs.length) continue;
-      const sub = validateWeights(subs, si => si.name.trim());
-      if (!sub.ok) {
-        showError(`Under "${r.activity.trim()}": ${sub.error.replace(/^Scope weights/, "Sub-item weights")}`);
-        return;
-      }
+      const sub = validateTree(r.subItems, r.activity.trim());
+      if (!sub.ok) { showError(sub.error); return; }
     }
     setSavingScope(true);
     try {
@@ -416,17 +420,10 @@ export default function LeadTemplatesAdmin() {
           // Full precision, not the two-decimal display value.
           weightPct: r.weightPct === "" || r.weightPct == null ? null : Number(r.weightPct),
           weightManual: r.weightManual === true,
-          // Only named sub-items travel: a half-typed row the user left behind is
-          // not part of the standard, and the server rejects a nameless one.
-          subItems: (r.subItems || [])
-            .filter(si => (si.name || "").trim())
-            .map(si => ({
-              name: si.name.trim(),
-              description: si.description || null,
-              unit: si.unit || null,
-              weightPct: si.weightPct === "" || si.weightPct == null ? null : Number(si.weightPct),
-              weightManual: si.weightManual === true,
-            })),
+          // Only named nodes travel, at every level: a half-typed row the user
+          // left behind is not part of the standard, and the server rejects a
+          // nameless one. Each node carries its id so identity survives the save.
+          subItems: treeForSave(r.subItems),
         })),
       });
       await openTemplate(detail.id);
@@ -625,7 +622,14 @@ export default function LeadTemplatesAdmin() {
           not be read listed by their own row number. */}
       {scopePreview && (() => {
         const { lines, errors } = scopePreview;
-        const subCount = lines.reduce((n, r) => n + (r.subItems || []).length, 0);
+        // Counts EVERY node in the tree, not just each activity's direct children.
+        // Counting one level made a 180-row file report "14 sub-items", which reads
+        // as "your import was silently truncated" — the worst possible thing for a
+        // preview to say when the import was in fact complete.
+        const subCount = lines.reduce(
+          (n, r) => n + (r.subItems || []).reduce((m, si) => m + 1 + countDescendants(si), 0), 0);
+        const maxDepth = lines.reduce(
+          (d, r) => Math.max(d, ...flatten(r.subItems || []).map((f) => f.depth), 0), 0);
         return (
           <div className="lta-modal-back" onClick={() => setScopePreview(null)}>
             <div className="lta-modal" onClick={e => e.stopPropagation()}>
@@ -633,7 +637,8 @@ export default function LeadTemplatesAdmin() {
                 <h3>Import scope lines</h3>
                 <p className="lta-hint">
                   {lines.length} activit{lines.length === 1 ? "y" : "ies"}
-                  {subCount ? ` and ${subCount} sub-item${subCount === 1 ? "" : "s"}` : ""} read from the file.
+                  {subCount ? ` and ${subCount} sub-item${subCount === 1 ? "" : "s"}` : ""} read from the file
+                  {maxDepth > 1 ? `, nested ${maxDepth + 1} levels deep` : ""}.
                   This <b>replaces</b> the {scopeLines.length} line{scopeLines.length === 1 ? "" : "s"} currently
                   on screen — nothing is written until you press “Save scope lines”.
                 </p>
@@ -660,10 +665,17 @@ export default function LeadTemplatesAdmin() {
                           <td className="lta-c-unit">{r.unit}</td>
                           <td className="lta-c-weight">{r.weightPct === "" ? "auto" : fmtWeight(r.weightPct)}</td>
                         </tr>
-                        {(r.subItems || []).map((si, j) => (
-                          <tr key={`${i}-${j}`} className="lta-sub-summary">
-                            <td className="lta-c-no">{i + 1}.{j + 1}</td>
-                            <td className="lta-preview-sub">{si.name}</td>
+                        {/* The WHOLE tree, at full depth. flatten() walks it depth-first
+                            in reading order and hands back each node's path and depth, so
+                            the numbering here ("1.10.3") and the indentation match the
+                            file that was read — and a level-3 row can no longer vanish
+                            from a preview whose job is to show what will be imported. */}
+                        {flatten(r.subItems || []).map(({ node: si, path, depth }) => (
+                          <tr key={`${i}-${path.join("-")}`} className="lta-sub-summary">
+                            <td className="lta-c-no">{[i + 1, ...path.map(p => p + 1)].join(".")}</td>
+                            <td className="lta-preview-sub" style={{ paddingLeft: 8 + depth * 14 }}>
+                              {si.name}
+                            </td>
                             <td>{si.description}</td>
                             <td className="lta-c-unit">{si.unit}</td>
                             <td className="lta-c-weight">{si.weightPct === "" ? "auto" : fmtWeight(si.weightPct)}</td>
@@ -849,70 +861,17 @@ export default function LeadTemplatesAdmin() {
                             <tr className="lta-sub-block">
                               <td />
                               <td colSpan={7}>
-                                <div className="lta-sub-wrap">
-                                  <div className="lta-sub-head">
-                                    <span className="lta-hint">
-                                      Sub-items under <b>{r.activity.trim() || "this activity"}</b> — each is a share of
-                                      {" "}<b>this activity</b>, so they add up to 100% of it, not of the template.
-                                    </span>
-                                    <button className="lta-btn-ghost lta-act-right" onClick={() => resetSubWeights(i)}
-                                      disabled={subs.length === 0}
-                                      title="Unpin these sub-weights and split them evenly again">
-                                      <RefreshCw size={12} /> Reset
-                                    </button>
-                                    <button className="lta-btn-ghost" onClick={() => addSubItem(i)}>
-                                      <Plus size={12} /> Add sub-item
-                                    </button>
-                                  </div>
-                                  {subs.length === 0 ? (
-                                    <div className="lta-empty lta-sub-empty">
-                                      No breakdown. "Add sub-item" to standardise the work under this activity.
-                                    </div>
-                                  ) : (
-                                    <table className="lta-table lta-table--sub">
-                                      <thead><tr><th className="lta-c-no" /><th>Sub-item</th><th>Description</th><th className="lta-c-unit">Unit</th><th className="lta-c-weight">Weight %</th><th className="lta-c-act" /></tr></thead>
-                                      <tbody>
-                                        {subs.map((si, j) => (
-                                          <tr key={j}>
-                                            <td className="lta-c-no">{i + 1}.{j + 1}</td>
-                                            <td>
-                                              <ActivityNameSelect className="lta-inp" value={si.name}
-                                                onChange={v => updSubItem(i, j, "name", v)}
-                                                options={activityOptions} register={registerActivity}
-                                                placeholder="Select sub-item…" />
-                                            </td>
-                                            <td><input className="lta-inp" value={si.description}
-                                              onChange={e => updSubItem(i, j, "description", e.target.value)} placeholder="Optional" /></td>
-                                            <td className="lta-c-unit">
-                                              <UnitSelectCell className="lta-inp" value={si.unit}
-                                                onChange={v => updSubItem(i, j, "unit", v)} />
-                                            </td>
-                                            <td className="lta-c-weight">
-                                              <input
-                                                className={`lta-inp lta-inp--w${si.weightManual ? " lta-w-pinned" : ""}`}
-                                                type="number" min="0" max="100" step="0.01" value={si.weightPct}
-                                                onChange={e => setSubWeight(i, j, e.target.value)}
-                                                title={si.weightManual
-                                                  ? "Set by you — this weight holds while the others rebalance around it."
-                                                  : "Calculated automatically. Type a value to hold it."} />
-                                            </td>
-                                            <td className="lta-c-act">
-                                              <button className="lta-icon-del" onClick={() => rmSubItem(i, j)}><Trash2 size={13} /></button>
-                                            </td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  )}
-                                  {subs.length > 0 && (
-                                    <div className={`lta-weight-total lta-weight-total--sub${subsOk ? " lta-weight-total--ok" : " lta-weight-total--err"}`}>
-                                      <span>Sub-total: <b>{fmtWeight(subTotal)}%</b> of {r.activity.trim() || "this activity"}</span>
-                                      <span className="lta-hint">
-                                        {subsOk ? "Adds up." : "Must add up to 100% of the activity before this template can be saved."}
-                                      </span>
-                                    </div>
-                                  )}
-                                </div>
+                                {/* The shared recursive editor. This page used to inline its own
+                                    copy of this table in the lta-* namespace; nesting made three
+                                    hand-maintained copies untenable, so all three screens now use
+                                    ScopeTreeEditor and the copy was removed. */}
+                                <ScopeTreeEditor
+                                  subs={subs}
+                                  onChange={(next) => updSubs(i, next)}
+                                  parentName={r.activity}
+                                  options={activityOptions}
+                                  register={registerActivity}
+                                />
                               </td>
                             </tr>
                           )}

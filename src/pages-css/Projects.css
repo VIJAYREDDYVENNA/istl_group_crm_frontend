@@ -452,20 +452,21 @@
   margin-bottom: 18px;
 }
 
-/* ── Tab strip pins under the fixed 64px navbar ────────────────────────────────
-   The project header card is worth ~230px of a ~950px laptop viewport, which left
-   the tab content itself a narrow slot to scroll in. Rather than shrink the header
-   permanently — it carries id, budget, timeline and both progress bars, all wanted
-   on arrival — let it scroll away and keep only the tab strip. The content block
-   then gets the full height below the navbar.
+/* ── Tab strip sits above the one scrolling pane ───────────────────────────────
+   .pd-page (below) is a fixed-height shell whose only scroll container is
+   .obd-tab-body; the header card now renders INSIDE that pane (first child) so
+   it scrolls away and the tab content gets the freed-up height. .pd-tabnav
+   lives outside the pane as a `.pd-page > *` flex-none child, so it is already
+   permanently visible above it without any help — `position: sticky` here was
+   fighting that: with nothing above it but the (short) back button, `top: 64px`
+   forced it to sit 64px down from the top of .pd-page's own scrollport, i.e.
+   INTO the header card that starts right after it, clipping the card's top.
+   No sticky needed — see the mobile/short-viewport media query below, where
+   .pd-page drops back to plain document scrolling and sticky is what's wanted.
 
    Scoped to .pd-page so the Order Book detail view, which shares .obd-* and
-   .pd-tabnav, is untouched. Requires .app to clip rather than hide its overflow —
-   see the note in App.css, without which this rule does nothing at all. */
+   .pd-tabnav, is untouched. */
 .pd-page .pd-tabnav {
-  position: sticky;
-  top: 64px;                 /* navbar height */
-  z-index: 20;               /* over page content, under the navbar (40) and modals */
   margin-bottom: 12px;
   /* Opaque background is not optional: content scrolls beneath this. */
   box-shadow: 0 8px 14px -10px rgba(15, 23, 42, 0.35);
@@ -820,7 +821,12 @@
 }
 
 /* Short or narrow viewports: a fixed-height page would squeeze the content pane
-   to a sliver under the header card, so hand scrolling back to the window. */
+   to a sliver under the header card, so hand scrolling back to the window.
+   .obd-tab-body is no longer its own scroll container here — the DOCUMENT
+   scrolls — so the tab strip needs its own `position: sticky` to stay pinned
+   under the fixed navbar as the header card (now the pane's first child)
+   scrolls past it. Requires .app to clip rather than hide its overflow so this
+   resolves against the document; see the note in App.css. */
 @media (max-width: 768px), (max-height: 620px) {
   .pd-page {
     height: auto;
@@ -829,5 +835,10 @@
   .pd-page > .obd-tab-body {
     overflow-y: visible;
     padding-bottom: 0;
+  }
+  .pd-page .pd-tabnav {
+    position: sticky;
+    top: 64px;
+    z-index: 20;
   }
 }

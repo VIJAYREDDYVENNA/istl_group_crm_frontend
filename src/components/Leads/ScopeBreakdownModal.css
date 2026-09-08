@@ -1,0 +1,123 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   ScopeBreakdownModal — own namespace (sbm-*), modelled on the project screen's
+   existing .obd-fv-overlay / .obd-week-modal pattern. Kept separate rather than
+   reusing obd-fv-* directly so the lead detail view — which doesn't load
+   OrderBookDetail.css — can use this modal too.
+
+   Uses the numeric --c-<hex>/--ct-<hex> tokens from theme.css (the ones
+   ScopeSubItemsEditor.css / ScopeTreeEditor.css already use), NOT the semantic
+   --bg-card/--text-primary aliases local to .obd-page — this modal has to render
+   correctly outside that page too.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.sbm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, .6);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.sbm-modal {
+  background: var(--c-fff, #fff);
+  border-radius: 12px;
+  /* Wide enough that a leaf's date pickers, a parent's date+granularity
+     controls, the status select and progress inputs all sit on one line
+     without wrapping — wrapping is what made rows line up inconsistently
+     with each other (a wrapped row is taller and its second line starts back
+     at the left edge, breaking the column alignment the table otherwise
+     guarantees). 96vw covers a phone without a horizontal scrollbar. */
+  width: min(1180px, 96vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .3);
+}
+
+.sbm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--c-e5e7eb, #e5e7eb);
+  flex: 0 0 auto;
+}
+
+.sbm-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ct-111827, #111827);
+  overflow: hidden;
+}
+
+.sbm-title b {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sbm-title-sep { color: var(--ct-9ca3af, #9ca3af); font-weight: 400; }
+
+/* Matches .ssi-bad (ScopeSubItemsEditor.css) — the same "weights don't add up"
+   warning colour used everywhere else this tree is edited. */
+.sbm-bad {
+  color: var(--ct-dc2626, #dc2626);
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sbm-close {
+  background: none;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--ct-6b7280, #6b7280);
+  padding: 0 4px;
+  flex: 0 0 auto;
+}
+.sbm-close:hover { color: var(--ct-111827, #111827); }
+
+/* The one scrolling region — the breakdown itself may be several levels deep
+   and taller than the dialog. ScopeTreeEditor's own table just flows here;
+   there's no separate inner cap to fight, unlike the table wraps this modal
+   replaces. */
+.sbm-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 18px;
+}
+
+.sbm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--c-e5e7eb, #e5e7eb);
+  flex: 0 0 auto;
+}
+
+.sbm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--c-fff, #fff);
+  color: var(--ct-374151, #374151);
+  border: 1px solid var(--c-e5e7eb, #e5e7eb);
+  border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sbm-btn:hover { background: var(--c-f3f4f6, #f3f4f6); }
