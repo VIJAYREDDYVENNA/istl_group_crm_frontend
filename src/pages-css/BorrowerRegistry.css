@@ -691,7 +691,6 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
 }
 .po-dtp-trigger:hover { border-color: var(--c-94a3b8, #94a3b8); }
 .po-dtp--open { border-color: var(--c-2563eb, #2563eb); box-shadow: 0 0 0 2px rgba(37, 99, 235, .1); }
-.po-dtp--set  { border-color: var(--c-2563eb, #2563eb); }
 .po-dtp-ph    { color: var(--ct-9ca3af, #9ca3af); font-size: 13px; flex: 1; }
 .po-dtp-x     { display: flex; align-items: center; padding: 2px; border-radius: 4px; color: var(--ct-94a3b8, #94a3b8); transition: color .13s, background .13s; }
 .po-dtp-x:hover { color: var(--ct-ef4444, #ef4444); background: var(--c-fee2e2, #fee2e2); }
