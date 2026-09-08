@@ -22,8 +22,8 @@ import React, {
 } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, FileText, Pencil, Plus, MapPin, Mail, Phone,
-  Building2, Users, Link2, Paperclip, Upload, Trash2, AlertTriangle, CalendarClock,
+  ArrowLeft, FileText, Pencil, Plus,
+  Building2, Users, Paperclip, Upload, Trash2, AlertTriangle, CalendarClock,
   Eye, Download, Check,
 } from 'lucide-react';
 import borrowerApi from '../../services/borrowerApi';
@@ -35,9 +35,10 @@ import DocumentViewerModal from './DocumentViewerModal';
 import SanctionCompareModal from './SanctionCompareModal';
 import SanctionStatusBadge from './SanctionStatusBadge';
 import {
-  SanctionDetailsCard, DerivedValuesCard, RepaymentScheduleSection, Row, statusLabel,
+  RepaymentScheduleSection, statusLabel,
 } from './SanctionOverviewPanel';
-import { deriveRepaymentSchedule } from './sanctionDerive';
+import SanctionDetailView from './SanctionDetailView';
+import { deriveRepaymentSchedule, buildTermScheduleViews } from './sanctionDerive';
 // The Group/Sub Group entity-detail branch (see the `groupId` route param
 // below) reuses these exact presentational pieces — no separate
 // "GroupEntityDetail" page/design; this is the SAME detail-view component
@@ -45,8 +46,6 @@ import { deriveRepaymentSchedule } from './sanctionDerive';
 import { TypeBadge } from './GroupDetail';
 import '../../pages-css/BorrowerRegistry.css';
 import '../../pages-css/BorrowerRegistryPremium.css';
-
-const isBlank = (v) => v === null || v === undefined || String(v).trim() === '';
 
 // Documents live inside the Sanction Letters tab now (each row carries its own
 // View/Download/Attach actions) rather than as a tab of their own —
@@ -257,10 +256,6 @@ const BorrowerDetail = () => {
   const [importing, setImporting] = useState(false);
   const [deleteSanction, setDeleteSanction] = useState(null); // row awaiting confirmation
   const [deleting, setDeleting] = useState(false);
-  // Identity is the one card still shown whole rather than through
-  // SanctionOverviewPanel (it isn't sanction-specific), so it keeps its own
-  // "show all" state here.
-  const [identityExpanded, setIdentityExpanded] = useState(false);
 
   const backToRegistry = useCallback(() => navigate('/lender/borrowers'), [navigate]);
 
@@ -552,18 +547,19 @@ const BorrowerDetail = () => {
     // This IS a sanction detail view, not a Group/Sub Group summary page —
     // the entity owning the sanction (a Group/Sub Group here, a borrower on
     // the company path above) only decides which record supplies the data;
-    // the exact same three cards/tabs a company sanction gets are reused
-    // unchanged below (SanctionDetailsCard/DerivedValuesCard/
-    // RepaymentScheduleSection, imported from SanctionOverviewPanel.js —
-    // the SAME components, not lookalikes). `?sanctionId=` picks which of
-    // this Group/Sub Group's own direct sanctions is active, exactly like
-    // the company path's own `active`/`selectSanction` above.
+    // the exact same shared view/tabs a company sanction gets are reused
+    // unchanged below (SanctionDetailView/RepaymentScheduleSection, imported
+    // from SanctionDetailView.js/SanctionOverviewPanel.js — the SAME
+    // components, not lookalikes). `?sanctionId=` picks which of this
+    // Group/Sub Group's own direct sanctions is active, exactly like the
+    // company path's own `active`/`selectSanction` above.
     const groupHasMultipleSanctions = groupSanctions.length > 1;
     const activeGroupSanction = (sanctionIdParam
       ? groupSanctions.find((s) => String(s.id) === String(sanctionIdParam))
       : null) || groupSanctions[0] || null;
     const groupScheduleView = activeGroupSanction ? deriveRepaymentSchedule(activeGroupSanction) : null;
-    // Never persisted, never a real borrower row — SanctionDetailsCard and
+    const groupTermScheduleViews = activeGroupSanction ? buildTermScheduleViews(activeGroupSanction) : [];
+    // Never persisted, never a real borrower row — SanctionDetailView and
     // RepaymentScheduleSection only ever read `borrower?.borrowerName` off
     // this (as a display-name fallback / export filename), so the Group/Sub
     // Group's own real, already-stored name is all that's needed here.
@@ -639,46 +635,7 @@ const BorrowerDetail = () => {
         </div>
 
         {groupActiveTab === 'overview' && (
-          <div className="br-grid-3">
-            <section className="br-card">
-              <header className="br-card-head">
-                <span className="br-dot br-dot-user" aria-hidden="true" />
-                <h2 className="br-card-title">{kind} identity</h2>
-              </header>
-              <dl className="br-dl br-scroll-body">
-                <Row label={kind === 'Parent Group' ? 'Group name' : 'Sub Group name'} value={group.groupName} strong />
-                {!isParentGroup && (
-                  <Row
-                    label="Parent Group" value={group.parentGroupName}
-                    icon={<Users size={14} aria-hidden="true" />}
-                  />
-                )}
-                <Row label="CIN" value={group.cin} mono />
-                <Row
-                  label="Registered address" value={group.registeredAddress}
-                  icon={<MapPin size={14} aria-hidden="true" />}
-                />
-                <Row label="Status" value={group.status} />
-              </dl>
-              <div className="br-card-foot">
-                {/* The one bridge to the management page — import/add
-                    sanction/add Sub Group/edit/delete all stay exclusive to
-                    GroupDetail.js, same as a company's own identity is only
-                    ever edited from its own "Edit identity details" here,
-                    never from a hierarchy page. */}
-                <button
-                  type="button" className="br-btn br-btn-sm"
-                  onClick={() => navigate(`/lender/borrowers/group/${group.id}`)}
-                >
-                  <Pencil size={14} aria-hidden="true" />
-                  Manage {kind}
-                </button>
-              </div>
-            </section>
-
-            <SanctionDetailsCard borrower={groupAsBorrower} sanction={activeGroupSanction} />
-            <DerivedValuesCard sanction={activeGroupSanction} />
-          </div>
+          <SanctionDetailView borrower={groupAsBorrower} sanction={activeGroupSanction} />
         )}
 
         {groupActiveTab === 'letters' && (
@@ -760,6 +717,7 @@ const BorrowerDetail = () => {
             borrower={groupAsBorrower}
             sanction={activeGroupSanction}
             scheduleView={groupScheduleView}
+            termScheduleViews={groupTermScheduleViews}
           />
         )}
 
@@ -860,47 +818,7 @@ const BorrowerDetail = () => {
   // in-progress form, since a saved sanction already carries the identical
   // field names (sanctionFields.js's key IS the DTO property).
   const pageScheduleView = active ? deriveRepaymentSchedule(active) : null;
-
-  // Same rule as the sanction cards — an unfilled identity field is left out
-  // rather than repeated as "Not entered" fifteen times. The pending chip and
-  // the button below already say what's outstanding.
-  //
-  // The name is exempt: it is always set, and a card headed "Borrower identity"
-  // that doesn't show the borrower's name reads as broken — the more so once
-  // the blank rows around it are hidden and the card falls back to an empty
-  // state while the name sits in the title right above it.
-  const identityKycAll = [
-    { label: 'CIN', value: borrower.cin, mono: true },
-    { label: 'PAN', value: borrower.pan, mono: true },
-    { label: 'Promoter', value: borrower.promoterName, icon: <Building2 size={14} aria-hidden="true" /> },
-    { label: 'Sponsor', value: borrower.sponsorName, icon: <Building2 size={14} aria-hidden="true" /> },
-    { label: 'Guarantor', value: borrower.guarantorName, icon: <Users size={14} aria-hidden="true" /> },
-    { label: 'Group name', value: borrower.groupName },
-    { label: 'Cat', value: borrower.borrowerCategory },
-    { label: 'Sub Cat', value: borrower.borrowerSubCategory },
-    { label: 'State', value: borrower.state, icon: <MapPin size={14} aria-hidden="true" /> },
-    { label: 'Registered office', value: borrower.registeredAddress, icon: <MapPin size={14} aria-hidden="true" /> },
-    { label: 'Contact person', value: borrower.contactPerson, icon: <Users size={14} aria-hidden="true" /> },
-    { label: 'Email', value: borrower.contactEmail, icon: <Mail size={14} aria-hidden="true" /> },
-    { label: 'Phone', value: borrower.contactPhone, icon: <Phone size={14} aria-hidden="true" /> },
-    {
-      label: 'Linked project',
-      value: borrower.projectId ? `#${borrower.projectId}` : null,
-      empty: 'Not linked',
-      icon: <Link2 size={14} aria-hidden="true" />,
-    },
-  ];
-  const identityKycFilled = identityKycAll.filter((r) => !isBlank(r.value));
-  const identityKyc = identityExpanded ? identityKycAll : identityKycFilled;
-  const identityCanToggle = identityKycFilled.length < identityKycAll.length;
-
-  const identityRows = [
-    { label: 'Borrower name', value: borrower.borrowerName, strong: true },
-    ...identityKyc,
-  ];
-  const filled = borrower.identityFilled ?? 0;
-  const total = borrower.identityTotal ?? 7;
-  const pending = total - filled;
+  const pageTermScheduleViews = active ? buildTermScheduleViews(active) : [];
 
   return (
     <div className="br-page">
@@ -1000,50 +918,7 @@ const BorrowerDetail = () => {
       </div>
 
       {activeTab === 'overview' && (
-          <div className="br-grid-3">
-          <section className="br-card">
-            <header className="br-card-head">
-              <span className="br-dot br-dot-user" aria-hidden="true" />
-              <h2 className="br-card-title">Borrower identity</h2>
-              <span className={`br-chip ${pending ? 'br-chip-warn' : 'br-chip-ok'}`}>
-                {pending ? `${pending} of ${total} pending` : 'Complete'}
-              </span>
-            </header>
-            <dl className="br-dl br-scroll-body">
-              {identityRows.map((r) => (
-                <Row key={r.label} label={r.label} value={r.value} empty={r.empty || 'Not entered'}
-                     mono={r.mono} icon={r.icon} strong={r.strong} />
-              ))}
-            </dl>
-            {identityKyc.length === 0 && (
-              <p className="br-muted br-dl-note">
-                The rest comes from the KYC pack — a sanction letter doesn't carry it.
-              </p>
-            )}
-            {identityCanToggle && (
-              <button type="button" className="br-link br-link-block" onClick={() => setIdentityExpanded((v) => !v)}>
-                {identityExpanded ? 'Hide empty fields' : `${identityKycFilled.length} of ${identityKycAll.length} fields available — show all`}
-              </button>
-            )}
-            <div className="br-card-foot">
-              <button
-                type="button"
-                className="br-btn br-btn-sm"
-                onClick={() => setEditIdentity(true)}
-                disabled={borrower.canEditBorrower === false}
-                title={borrower.canEditBorrower === false
-                  ? "You can view this company because you're on a sanction under it, but only its creator or team can edit its details."
-                  : undefined}
-              >
-                <Plus size={14} aria-hidden="true" />
-                {pending ? 'Complete identity details' : 'Edit identity details'}
-              </button>
-            </div>
-          </section>
-
-          <SanctionDetailsCard borrower={borrower} sanction={active} />
-          <DerivedValuesCard sanction={active} />
-          </div>
+        <SanctionDetailView borrower={borrower} sanction={active} />
       )}
 
       {activeTab === 'letters' && (
@@ -1131,7 +1006,10 @@ const BorrowerDetail = () => {
       )}
 
       {activeTab === 'schedule' && (
-        <RepaymentScheduleSection borrower={borrower} sanction={active} scheduleView={pageScheduleView} />
+        <RepaymentScheduleSection
+          borrower={borrower} sanction={active} scheduleView={pageScheduleView}
+          termScheduleViews={pageTermScheduleViews}
+        />
       )}
 
       {/* Not tied to any one tab — each Sanction Letters row's View/Download/

@@ -44,21 +44,19 @@ export const parseMoney = (raw) => {
   return n;
 };
 
-// Renders plain rupees back as "₹153.75 Cr" for display — exactly, never
-// rounded away below the paisa. toFixed(9) is enough decimal places to
-// carry a 2-rupee-decimal value through a /CRORE (1e7) division exactly;
-// trailing zeros are then trimmed, with a floor of 2 decimals so a round
-// figure still reads "232.00" rather than "232". This is also what
-// SanctionFormModal's normalizeMoneyValue round-trips a typed amount
-// through (parseMoneyCrore → formatCrore) before saving, so keeping this
-// exact is what stops that round-trip from quietly rounding the value
-// that gets persisted.
+// Renders plain rupees back as "₹153.75 Cr" for display — always exactly 2
+// decimals. `rupees` itself is never touched here (a computed value like
+// first-year interest or a DSRA/ISRA amount keeps its full, unrounded
+// precision everywhere it's actually used in a calculation); only the
+// string this function hands to the UI is rounded, the same "at most 2
+// decimals" shape every entered money field already showed. This is also
+// what SanctionFormModal's normalizeMoneyValue round-trips a typed amount
+// through (parseMoneyCrore → formatCrore) before saving — no change there
+// either, since the backend's own parseMoneyCrore already rounds to 2
+// decimals on save regardless of what this function displays.
 export const formatCrore = (rupees) => {
   if (rupees === null || rupees === undefined || Number.isNaN(rupees)) return null;
-  let cr = (rupees / CRORE).toFixed(9).replace(/0+$/, '').replace(/\.$/, '');
-  const decimals = cr.includes('.') ? cr.length - cr.indexOf('.') - 1 : 0;
-  if (decimals < 2) cr = (+cr).toFixed(2);
-  return `₹${cr} Cr`;
+  return `₹${(rupees / CRORE).toFixed(2)} Cr`;
 };
 
 /** Accepts "14 March 2025", "14 Mar 2025", "14/03/2025", "2025-03-14". */
@@ -185,34 +183,39 @@ export const parseMoneyCrore = (raw) => {
 
 /**
  * Repayment cycle options, in the order the dropdown shows them. The single
- * source of truth for how many months are in one repayment period — no
- * schedule/DSRA/ISRA call site hardcodes "3" (a quarter) directly anymore.
- * Mirrors SanctionDerivedCalculator.resolveMonthsPerPeriod (Java) 1:1.
+ * source of truth for the length of one repayment period — no schedule/
+ * DSRA/ISRA call site hardcodes "3" (a quarter) directly anymore. Exactly one
+ * of months/days is set per entry: Bi-Monthly is a true 15-day cycle (twice a
+ * month), not a whole-month one, so it carries `days` instead of `months` —
+ * everything else steps in whole months. Mirrors
+ * SanctionDerivedCalculator.resolveRepaymentPeriod (Java) 1:1.
  */
 export const REPAYMENT_FREQUENCIES = [
-  { value: 'MONTHLY', label: 'Monthly', months: 1 },
-  { value: 'BI_MONTHLY', label: 'Bi-Monthly', months: 2 },
-  { value: 'QUARTERLY', label: 'Quarterly', months: 3 },
-  { value: 'HALF_YEARLY', label: 'Half-Yearly / Semi-Annual', months: 6 },
-  { value: 'YEARLY', label: 'Yearly / Annual', months: 12 },
-  { value: 'OTHER', label: 'Other', months: null },
+  { value: 'BI_MONTHLY', label: 'Bi-Monthly (15 Days)', months: null, days: 15 },
+  { value: 'MONTHLY', label: 'Monthly', months: 1, days: null },
+  { value: 'QUARTERLY', label: 'Quarterly', months: 3, days: null },
+  { value: 'HALF_YEARLY', label: 'Half-Yearly / Semi-Annual', months: 6, days: null },
+  { value: 'YEARLY', label: 'Yearly / Annual', months: 12, days: null },
+  { value: 'OTHER', label: 'Other', months: null, days: null },
 ];
 
 /**
- * Months in one repayment period for the given frequency (+ custom interval,
- * for OTHER). Returns null for OTHER with no valid custom months set yet —
- * callers must skip generating a schedule rather than silently treating it
- * as quarterly. Returns 3 for an unset/unrecognised frequency, matching the
- * interval every schedule used before this field existed, so old records
- * without it keep generating exactly the schedule they always did.
+ * The length of one repayment period for the given frequency (+ custom
+ * interval, for OTHER) — `{ months, days }` with exactly one of the two set.
+ * Returns null for OTHER with no valid custom months set yet — callers must
+ * skip generating a schedule rather than silently treating it as quarterly.
+ * Returns `{ months: 3, days: null }` for an unset/unrecognised frequency,
+ * matching the interval every schedule used before this field existed, so
+ * old records without it keep generating exactly the schedule they always
+ * did.
  */
-export const repaymentFrequencyMonths = (freq, otherMonths) => {
+export const resolveRepaymentPeriod = (freq, otherMonths) => {
   if (freq === 'OTHER') {
     const n = parseInt(otherMonths, 10);
-    return Number.isFinite(n) && n > 0 ? n : null;
+    return Number.isFinite(n) && n > 0 ? { months: n, days: null } : null;
   }
   const found = REPAYMENT_FREQUENCIES.find((f) => f.value === freq);
-  return found ? found.months : 3;
+  return found ? { months: found.months, days: found.days } : { months: 3, days: null };
 };
 
 const NUMBER_WORDS = {
@@ -265,6 +268,9 @@ const addMonthsEndOfMonth = (d, n) => {
   return new Date(stepped.getFullYear(), stepped.getMonth() + 1, 0);
 };
 
+/** Plain calendar-day arithmetic — Bi-Monthly's 15-day cycle, no EOM snapping. */
+const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+
 const QUARTER_END_MONTHS = [2, 5, 8, 11]; // Mar, Jun, Sep, Dec (0-indexed)
 
 /**
@@ -301,13 +307,19 @@ const nextCalendarQuarterEnd = (d) => {
  * Moratorium End — never via a separately-stepped moratorium loop, which is
  * what previously let an extra, mis-anchored period slip in between the
  * moratorium and the first real repayment.
+ *
+ * `period` is `{ months, days }` with exactly one set — Bi-Monthly's 15-day
+ * cycle steps by plain calendar days (never EOM-snapped, since a 15-day
+ * period isn't anchored to month boundaries); every other frequency steps
+ * in whole months as before.
  */
-const periodEndDates = (start, end, monthsPerPeriod, isQuarterly) => {
+const periodEndDates = (start, end, period, isQuarterly) => {
   const dates = [];
   let cursor = start;
   let first = true;
   while (cursor.getTime() < end.getTime()) {
-    const next0 = (first && isQuarterly) ? nextCalendarQuarterEnd(cursor) : addMonthsEndOfMonth(cursor, monthsPerPeriod);
+    const next0 = (first && isQuarterly) ? nextCalendarQuarterEnd(cursor)
+      : period.days ? addDays(cursor, period.days) : addMonthsEndOfMonth(cursor, period.months);
     const next = next0.getTime() > end.getTime() ? end : next0;
     dates.push(next);
     cursor = next;
@@ -337,7 +349,7 @@ const periodEndDates = (start, end, monthsPerPeriod, isQuarterly) => {
  * Disbursement Date, never the Sanction Date (a holiday measured from when
  * the project was actually funded, not from when the lender merely signed).
  */
-const resolveRepaymentWindow = (form) => {
+export const resolveRepaymentWindow = (form) => {
   const moratoriumStart = parseDate(form.disbursementDate);
   // A letter that states Tenor and Moratorium as two separate clauses
   // ("Tenor: 204 months ... inclusive of moratorium" / "Moratorium: 6
@@ -351,7 +363,7 @@ const resolveRepaymentWindow = (form) => {
     : NaN;
   const mora = Number.isNaN(explicitMora) ? parseMoratoriumMonths(form.tenorText) : explicitMora;
   const tenor = parseTenorMonths(form.tenorText);
-  const monthsPerPeriod = repaymentFrequencyMonths(form.repaymentFrequency, form.repaymentFrequencyOtherMonths);
+  const period = resolveRepaymentPeriod(form.repaymentFrequency, form.repaymentFrequencyOtherMonths);
   const isQuarterly = form.repaymentFrequency === 'QUARTERLY';
   const moratoriumEnd = moratoriumStart
     ? (mora ? addMonths(moratoriumStart, mora) : moratoriumStart)
@@ -361,8 +373,8 @@ const resolveRepaymentWindow = (form) => {
     || (moratoriumStart && tenor ? addMonthsEndOfMonth(moratoriumStart, tenor) : null);
 
   const repaymentStart = parseDate(form.repaymentStartDate)
-    || (moratoriumStart && moratoriumEnd && monthsPerPeriod && repaymentEnd
-      ? (periodEndDates(moratoriumStart, repaymentEnd, monthsPerPeriod, isQuarterly)
+    || (moratoriumStart && moratoriumEnd && period && repaymentEnd
+      ? (periodEndDates(moratoriumStart, repaymentEnd, period, isQuarterly)
         .find((d) => d.getTime() > moratoriumEnd.getTime()) || null)
       : null);
 
@@ -430,7 +442,7 @@ export const parseRepaymentProfile = (json) => {
  * stepping) — see periodEndDates.
  */
 export const buildQuarterEndSchedule = (
-  debtAmount, annualRoiPct, start, moratoriumEnd, repayEnd, monthsPerPeriod, capitalizeMoratoriumInterest,
+  debtAmount, annualRoiPct, start, moratoriumEnd, repayEnd, period, capitalizeMoratoriumInterest,
   repaymentPercents = null, isQuarterly = false,
 ) => {
   const schedule = [];
@@ -445,7 +457,7 @@ export const buildQuarterEndSchedule = (
   // Stage 1: the full calendar-anchored period sequence, uninterrupted by
   // the moratorium.
   let cursor = start;
-  const periods = periodEndDates(start, repayEnd, monthsPerPeriod, isQuarterly).map((end) => {
+  const periods = periodEndDates(start, repayEnd, period, isQuarterly).map((end) => {
     const p = { start: cursor, end };
     cursor = end;
     return p;
@@ -764,15 +776,15 @@ export const deriveSanction = (form) => {
   // values above and as deriveRepaymentSchedule's own table — one
   // calculation, reused three times, so DSRA/ISRA can never silently
   // disagree with what the Repayment Schedule tab shows for the identical
-  // sanction. monthsPerPeriod is null only for an incomplete "Other"
-  // frequency (no valid custom interval yet) — nothing to price a schedule
-  // against, so this whole block is skipped rather than guessing quarterly.
-  const monthsPerPeriod = repaymentFrequencyMonths(form.repaymentFrequency, form.repaymentFrequencyOtherMonths);
-  if (debt !== null && roi !== null && monthsPerPeriod
+  // sanction. period is null only for an incomplete "Other" frequency (no
+  // valid custom interval yet) — nothing to price a schedule against, so
+  // this whole block is skipped rather than guessing quarterly.
+  const period = resolveRepaymentPeriod(form.repaymentFrequency, form.repaymentFrequencyOtherMonths);
+  if (debt !== null && roi !== null && period
       && repaymentWindow.moratoriumStart && repaymentWindow.moratoriumEnd && repaymentWindow.repaymentEnd) {
     const schedule = buildQuarterEndSchedule(
       debt, roi, repaymentWindow.moratoriumStart, repaymentWindow.moratoriumEnd, repaymentWindow.repaymentEnd,
-      monthsPerPeriod, form.interestDuringMoratorium === 'CAPITALIZED',
+      period, form.interestDuringMoratorium === 'CAPITALIZED',
       parseRepaymentProfile(form.repaymentProfileJson), form.repaymentFrequency === 'QUARTERLY',
     );
 
@@ -842,7 +854,7 @@ export const deriveRepaymentSchedule = (form) => {
   // null only for an incomplete "Other" frequency (no valid custom interval
   // yet) — the schedule stays empty rather than guessing quarterly, same
   // guard deriveSanction's DSRA/ISRA block applies.
-  const monthsPerPeriod = repaymentFrequencyMonths(form.repaymentFrequency, form.repaymentFrequencyOtherMonths);
+  const period = resolveRepaymentPeriod(form.repaymentFrequency, form.repaymentFrequencyOtherMonths);
   const repaymentWindow = resolveRepaymentWindow(form);
 
   // Start/End are set from the resolved window unconditionally — d's own
@@ -867,7 +879,7 @@ export const deriveRepaymentSchedule = (form) => {
   // shrinks this list instead of listing three symptoms of the same cause.
   if (debt === null) out.scheduleMissing.push('Sanctioned amount');
   if (roi === null) out.scheduleMissing.push('Rate of Interest (Base Rate + Spread, or ROI)');
-  if (!monthsPerPeriod) {
+  if (!period) {
     out.scheduleMissing.push(form.repaymentFrequency === 'OTHER'
       ? 'Custom Interval (Months) for the Other repayment frequency'
       : 'Repayment Frequency');
@@ -888,11 +900,11 @@ export const deriveRepaymentSchedule = (form) => {
     out.scheduleMissing.push('a Repayment End Date after the Disb. Date — check the dates entered');
   }
 
-  if (debt !== null && roi !== null && monthsPerPeriod
+  if (debt !== null && roi !== null && period
       && repaymentWindow.moratoriumStart && repaymentWindow.moratoriumEnd && repaymentWindow.repaymentEnd) {
     out.schedule = buildQuarterEndSchedule(
       debt, roi, repaymentWindow.moratoriumStart, repaymentWindow.moratoriumEnd, repaymentWindow.repaymentEnd,
-      monthsPerPeriod, form.interestDuringMoratorium === 'CAPITALIZED',
+      period, form.interestDuringMoratorium === 'CAPITALIZED',
       parseRepaymentProfile(form.repaymentProfileJson), form.repaymentFrequency === 'QUARTERLY',
     );
 
@@ -937,5 +949,25 @@ export const deriveRepaymentSchedule = (form) => {
   }
   return out;
 };
+
+/**
+ * One deriveRepaymentSchedule() result per Sanction Term on `sanctionLike`
+ * (a live SanctionFormModal `form` draft, or an already-saved sanction
+ * wrapper straight from the API — both have the same `.terms[]` shape),
+ * each fed that term's own Actual Disb. Date, Term Limit, and repayment-
+ * percentage profile instead of the whole sanction's. Shared by
+ * SanctionFormModal's own Repayment Schedule tab and the read-only
+ * Repayment Schedule section on the Borrower/Group Detail pages
+ * (SanctionOverviewPanel.js) — one calculation, not two copies that could
+ * drift apart.
+ */
+export const buildTermScheduleViews = (sanctionLike) => (sanctionLike?.terms || []).map((term) => deriveRepaymentSchedule({
+  ...sanctionLike,
+  disbursementDate: term.actualDisbursementDate,
+  debtAmount: term.termLimit,
+  repaymentStartDate: '',
+  repaymentEndDate: '',
+  repaymentProfileJson: term.repaymentProfileJson || '',
+}));
 
 export default deriveSanction;
