@@ -54,14 +54,38 @@
 import { REPAYMENT_FREQUENCIES } from './sanctionDerive';
 import { toCin } from './borrowerFields';
 
+// The registry's fixed facility-type vocabulary — mirrors the backend's own
+// SanctionDocExtractor.INSTRUMENT_CANON exactly (same values), so whatever a
+// letter's Instrument auto-fill picked always lands on a real option here.
+// Shared, one definition, by both the Product section's Instrument dropdown
+// and the Sanction Terms table's own Facility Type column.
+export const FACILITY_TYPE_OPTIONS = [
+  { value: '', label: 'Select' },
+  { value: 'Term Loan', label: 'Term Loan' },
+  { value: 'FCTL', label: 'Foreign Currency Term Loan (FCTL)' },
+  { value: 'ECB', label: 'External Commercial Borrowing (ECB)' },
+  { value: 'NCD', label: 'Non-Convertible Debenture (NCD)' },
+  { value: 'Bridge Loan', label: 'Bridge Loan' },
+  { value: 'Bank Guarantee', label: 'Bank Guarantee' },
+  { value: 'LC', label: 'Letter of Credit (LC)' },
+  { value: 'Cash Credit', label: 'Cash Credit' },
+  { value: 'Overdraft (OD)', label: 'Overdraft (OD)' },
+];
+
+// Declaration order below drives the section-nav order in SanctionFormModal
+// (via sanctionFieldGroups()) — 01 Number … 12 Additional Information, with
+// Sanction Terms/Derived Values/Status inserted between these FIELDS-backed
+// groups by SanctionFormModal itself (they have no scalar fields of their
+// own: Sanction Terms is the `terms` array/SanctionTermsCard, Derived Values
+// is computed by deriveSanction, Status is the sanction's status/source).
 export const SANCTION_FIELDS = [
-  // ── Number ──
+  // ── 01 Number ──
   // The registry sheet heads this column "SL Ref. No"; the letter calls it the
   // reference number. One field, labelled for wherever it is being read.
   { key: 'refNo', group: 'Number', label: 'Reference number', required: true,
     kind: 'text', placeholder: 'VIFL/PF/2025/1007', width: 160, mono: true },
 
-  // ── Borrower Details (letter-level, mirrored onto the borrower on save) ──
+  // ── 02 Borrower Details (letter-level, mirrored onto the borrower on save) ──
   { key: 'borrowerName', group: 'Borrower Details', label: 'Borrower', required: true,
     kind: 'text', placeholder: 'Company name in full', width: 220 },
   { key: 'lenderName', group: 'Borrower Details', label: 'Lender',
@@ -106,34 +130,64 @@ export const SANCTION_FIELDS = [
   { key: 'location', group: 'Borrower Details', label: 'Project Location',
     kind: 'text', width: 160, formHidden: true },
 
-  // ── Project Cost & Means of Finance ──
+  // ── 03 Project Details ──
+  // Group / Sub Group: rendered by TechnologyGroupDropdowns (SanctionFormModal),
+  // not the generic field loop — formHidden keeps them out of it while still
+  // participating in EMPTY/load/save via the FIELDS-driven reduce.
+  { key: 'projectGroup', group: 'Project Details', label: 'Group',
+    kind: 'text', formHidden: true },
+  { key: 'projectSubGroup', group: 'Project Details', label: 'Sub Group',
+    kind: 'text', formHidden: true },
+
+  // State is the borrower's, not the sanction's — the registry column reads it
+  // off the borrower row, so there is no field for it here.
+  { key: 'technology', group: 'Project Details', label: 'Technology',
+    kind: 'text', textarea: true, wide: true, placeholder: 'Solar PV', width: 300 },
+
+  // ── 04 Project Cost & Finance ──
   // Money is quoted in crore on this sheet, so the inputs say so and a bare
   // number scales. An explicit unit still wins.
-  { key: 'projectCost', group: 'Project Cost & Means of Finance', label: 'Project Cost',
+  { key: 'projectCost', group: 'Project Cost & Finance', label: 'Project Cost',
     kind: 'money', placeholder: '205.00', suffix: 'in ₹ Cr', align: 'right', width: 120 },
-  { key: 'debtAmount', group: 'Project Cost & Means of Finance', label: "Debt (Rs. Cr's)",
+  { key: 'debtAmount', group: 'Project Cost & Finance', label: "Debt (Rs. Cr's)",
     kind: 'money', placeholder: '153.75', suffix: 'in ₹ Cr', align: 'right', width: 120 },
-  { key: 'equityAmount', group: 'Project Cost & Means of Finance', label: "Equity (Rs. Cr's)",
+  { key: 'equityAmount', group: 'Project Cost & Finance', label: "Equity (Rs. Cr's)",
     kind: 'money', placeholder: '51.25', suffix: 'in ₹ Cr', align: 'right', width: 130 },
-  { key: 'debtPct', group: 'Project Cost & Means of Finance', label: 'Debt (%)',
+  { key: 'debtPct', group: 'Project Cost & Finance', label: 'Debt (%)',
     kind: 'pct', placeholder: '75', align: 'right', width: 90 },
-  { key: 'equityPct', group: 'Project Cost & Means of Finance', label: 'Equity (%)',
+  { key: 'equityPct', group: 'Project Cost & Finance', label: 'Equity (%)',
     kind: 'pct', placeholder: '25', align: 'right', width: 100 },
-  { key: 'sanctionedAmount', group: 'Project Cost & Means of Finance', label: 'Sanctioned amount',
+  { key: 'sanctionedAmount', group: 'Project Cost & Finance', label: 'Sanctioned amount',
     required: true, kind: 'money', placeholder: '153.75', suffix: 'in ₹ Cr',
     align: 'right', width: 140, listHidden: true },
-  { key: 'debtEquityRatio', group: 'Project Cost & Means of Finance', label: 'Debt : equity',
+  { key: 'debtEquityRatio', group: 'Project Cost & Finance', label: 'Debt : equity',
     kind: 'ratio', placeholder: '75:25', width: 110, listHidden: true },
 
-  // ── Rate of Interest ──
+  // ── 05 Product ──
+  // Options mirror the backend's own fixed vocabulary — SanctionDocExtractor
+  // (INSTRUMENT_CANON) only ever auto-fills one of these exact strings, so
+  // whatever the letter picked always lands on a real option here, selected
+  // by default; a blank first option covers a letter that named none of them.
+  // Shared with the Sanction Terms table's own Facility Type column (rendered
+  // in the 06 Sanction Terms section, right after this one) — one
+  // definition, so the two dropdowns can never drift apart.
+  { key: 'limitAmount', group: 'Product', label: 'Limit',
+    required: true, kind: 'money', placeholder: '270.04', suffix: 'in ₹ Cr',
+    align: 'right', width: 140,
+    hint: 'Auto-filled from Debt amount. This is the total sanctioned limit.' },
+  { key: 'instrument', group: 'Product', label: 'Instrument',
+    kind: 'select', width: 190,
+    options: FACILITY_TYPE_OPTIONS },
+
+  // ── 07 Interest & Repayment ──
   // Base Rate and Spread default their box to "0" (via placeholder, not a
   // real stored value) rather than sitting empty — see the placeholder note
   // on each. A blank box still parses to null, so a letter that states a
   // fixed rate with no base/spread breakdown at all is never zeroed out by
   // this default; it only takes effect once both are genuinely known.
-  { key: 'baseRatePct', group: 'Rate of Interest', label: 'Base Rate (%)',
+  { key: 'baseRatePct', group: 'Interest & Repayment', label: 'Base Rate (%)',
     kind: 'pct', placeholder: '0', align: 'right', width: 100 },
-  { key: 'spreadPct', group: 'Rate of Interest', label: 'Spread (%)',
+  { key: 'spreadPct', group: 'Interest & Repayment', label: 'Spread (%)',
     kind: 'pct', placeholder: '0', align: 'right', width: 90 },
   // Not a box to type into — its value is always worked out: Base Rate +
   // Spread once both are known (even overriding a figure the letter states
@@ -145,7 +199,7 @@ export const SANCTION_FIELDS = [
   // visible as they change. Still shown as its own column in the registry
   // table, under its usual "ROI" heading — `formLabel` only changes what the
   // sanction form itself calls it, not the table or the detail page.
-  { key: 'roiPct', group: 'Rate of Interest', label: 'ROI', formLabel: 'Rate of Interest (%)',
+  { key: 'roiPct', group: 'Interest & Repayment', label: 'ROI', formLabel: 'Rate of Interest (%)',
     kind: 'pct', placeholder: '9.75', align: 'right', width: 90,
     readOnly: true, detailHidden: true, derivedKey: 'roi' },
   // The letter's own wording — kept as the full sentence rather than having
@@ -154,33 +208,23 @@ export const SANCTION_FIELDS = [
   // labelled "Rate of interest" on the detail page; `formLabel` only renames
   // it on the sanction form, next to the new Rate of Interest (%) figure,
   // where the two sitting side by side under the same name would be confusing.
-  { key: 'interestRateText', group: 'Rate of Interest', label: 'Rate of interest',
+  { key: 'interestRateText', group: 'Interest & Repayment', label: 'Rate of interest',
     formLabel: 'Interest Terms',
     kind: 'text', placeholder: 'p.a. (floating, linked to 1-yr MCLR + spread)',
     width: 200, listHidden: true },
-
-  // ── Project Details ──
-  // State is the borrower's, not the sanction's — the registry column reads it
-  // off the borrower row, so there is no field for it here.
-  { key: 'technology', group: 'Project Details', label: 'Technology',
-    kind: 'text', textarea: true, wide: true, placeholder: 'Solar PV', width: 300 },
-
-  // ── Product ──
-  { key: 'instrument', group: 'Product', label: 'Instrument',
-    kind: 'text', placeholder: 'Term Loan', width: 150 },
-
-  // ── Security ──
-  { key: 'coObligators', group: 'Security', label: 'Co Obligators',
-    kind: 'text', placeholder: 'Names of any co-obligators', width: 190 },
-  { key: 'pledgeOfSharesPct', group: 'Security', label: 'Pledge of share of borrower (%)',
-    kind: 'pct', placeholder: '75', align: 'right', width: 150 },
-
-  // ── Time Lines ──
-  { key: 'sanctionDate', group: 'Time Lines', label: 'Sanction Date',
-    kind: 'date', placeholder: '14 March 2025', width: 130 },
-  { key: 'disbursementDate', group: 'Time Lines', label: 'Disb. Date', required: true,
-    kind: 'date', placeholder: '30 April 2025', width: 130 },
-  { key: 'tenorText', group: 'Time Lines', label: 'Tenor',
+  // Tentative/Actual Disb. Date used to live here as their own boxes. They
+  // now live on Sanction Terms instead — Term 1 carries exactly the same two
+  // dates, same behavior/validation/repayment-schedule logic, just per-term
+  // rather than one shared pair — see SanctionFormModal's withDerivedTerm1
+  // and SanctionTermsCard. Removed from here entirely (not just hidden) so
+  // there's no duplicate disbursement-date field anywhere in this group;
+  // `disbursementDate`/`tentativeDisbursementDate` still exist as plain
+  // (non-FIELDS) `form` keys in SanctionFormModal, kept in sync from Term 1,
+  // since every other derived calculation (deriveSanction,
+  // resolveRepaymentWindow, the "Updates as you type" panel, the backend's
+  // own validateSanction) already reads those exact field names and is
+  // deliberately left untouched.
+  { key: 'tenorText', group: 'Interest & Repayment', label: 'Tenor',
     kind: 'text', placeholder: '16 years including moratorium of 6 months', width: 300 },
   // Some letters state Tenor and Moratorium as two separate clauses instead
   // of one combined sentence ("Tenor: 204 months ... inclusive of
@@ -190,10 +234,10 @@ export const SANCTION_FIELDS = [
   // an explicit value here always wins over what would otherwise be parsed
   // out of the Tenor text. Blank simply falls back to that parse, exactly
   // as every record before this field existed already behaves.
-  { key: 'moratoriumMonths', group: 'Time Lines', label: 'Moratorium (Months)',
+  { key: 'moratoriumMonths', group: 'Interest & Repayment', label: 'Moratorium (Months)',
     kind: 'text', placeholder: 'e.g. 6', width: 150, listHidden: true,
     hint: 'Only needed when the letter states Tenor and Moratorium separately — overrides what would otherwise be parsed out of the Tenor text above.' },
-  { key: 'interestDuringMoratorium', group: 'Time Lines', label: 'Interest During Moratorium',
+  { key: 'interestDuringMoratorium', group: 'Interest & Repayment', label: 'Interest During Moratorium',
     kind: 'select', width: 190,
     options: [
       { value: 'SERVICED', label: 'Interest Served' },
@@ -205,39 +249,47 @@ export const SANCTION_FIELDS = [
   // defaults to Quarterly, the interval every schedule used before this
   // field existed, so a record that predates it keeps generating the same
   // schedule it always did.
-  { key: 'repaymentFrequency', group: 'Time Lines', label: 'Repayment Frequency',
+  { key: 'repaymentFrequency', group: 'Interest & Repayment', label: 'Repayment Frequency',
     kind: 'select', width: 190, listHidden: true, defaultValue: 'QUARTERLY',
     options: REPAYMENT_FREQUENCIES.map(({ value, label }) => ({ value, label })),
     hint: 'How often repayment instalments fall — drives the generated repayment schedule.' },
-  { key: 'repaymentFrequencyOtherMonths', group: 'Time Lines', label: 'Custom Interval (Months)',
+  { key: 'repaymentFrequencyOtherMonths', group: 'Interest & Repayment', label: 'Custom Interval (Months)',
     kind: 'text', placeholder: 'e.g. 4', width: 150, listHidden: true,
     hint: 'Only used when Repayment Frequency is Other.' },
   // Not a field anyone types into directly — edited via the per-period
   // inputs on the Repayment Schedule tab itself (see RepaymentScheduleTab.js),
   // which read/write this same JSON array. formHidden keeps it out of the
-  // Time Lines field grid; still persisted/loaded through the ordinary
-  // FIELDS-driven save/load pipeline like every other field here.
-  { key: 'repaymentProfileJson', group: 'Time Lines', label: 'Repayment Percentage Profile',
+  // field grid; still persisted/loaded through the ordinary FIELDS-driven
+  // save/load pipeline like every other field here.
+  { key: 'repaymentProfileJson', group: 'Interest & Repayment', label: 'Repayment Percentage Profile',
     kind: 'text', width: 0, formHidden: true, listHidden: true, detailHidden: true },
-  { key: 'repaymentStartDate', group: 'Time Lines', label: 'Repayment Start Date',
+  { key: 'repaymentStartDate', group: 'Interest & Repayment', label: 'Repayment Start Date',
     kind: 'date', placeholder: '30 September 2026', width: 170 },
-  { key: 'repaymentEndDate', group: 'Time Lines', label: 'Repayment End date',
+  { key: 'repaymentEndDate', group: 'Interest & Repayment', label: 'Repayment End date',
     kind: 'date', placeholder: '30 September 2041', width: 170 },
-  { key: 'scheduledCod', group: 'Time Lines', label: 'Planned COD Date',
+
+  // ── 08 Important Dates ──
+  { key: 'sanctionDate', group: 'Important Dates', label: 'Sanction Date',
+    kind: 'date', placeholder: '14 March 2025', width: 130 },
+  { key: 'scheduledCod', group: 'Important Dates', label: 'Scheduled COD date',
     kind: 'date', placeholder: '14 February 2026', width: 150, listHidden: true },
-  { key: 'actualCod', group: 'Time Lines', label: 'Actual COD Date',
+  { key: 'actualCod', group: 'Important Dates', label: 'Actual COD Date',
     kind: 'date', placeholder: '20 September 2025', width: 150, listHidden: true },
 
-  // ── Financial Covenants ──
+  // ── 09 Conditions & Covenants ──
+  { key: 'coObligators', group: 'Conditions & Covenants', label: 'Co Obligators',
+    kind: 'text', placeholder: 'Names of any co-obligators', width: 190 },
+  { key: 'pledgeOfSharesPct', group: 'Conditions & Covenants', label: 'Pledge of share of borrower (%)',
+    kind: 'pct', placeholder: '75', align: 'right', width: 150 },
   // DSRA, ISRA and cash sweep are phrases in real letters, not numbers, so they
   // stay free text and are compared as text.
-  { key: 'minDscr', group: 'Financial Covenants', label: 'Min. DSCR (x)',
+  { key: 'minDscr', group: 'Conditions & Covenants', label: 'Min. DSCR (x)',
     kind: 'multiple', placeholder: '1.12x', align: 'right', width: 100,
     hint: 'The floor for any individual year, not the average.' },
-  { key: 'avgDscr', group: 'Financial Covenants', label: 'Avg. DSCR (x)',
+  { key: 'avgDscr', group: 'Conditions & Covenants', label: 'Avg. DSCR (x)',
     kind: 'multiple', placeholder: '1.15x', align: 'right', width: 100,
     hint: 'The average across the complete loan tenor, not any single year.' },
-  { key: 'dsra', group: 'Financial Covenants', label: 'DSRA',
+  { key: 'dsra', group: 'Conditions & Covenants', label: 'DSRA',
     kind: 'text', textarea: true, placeholder: "One quarter's debt service", width: 170 },
   // Auto-filled from the DSRA requirement above and the repayment schedule
   // (see the gap-fill effect in SanctionFormModal, mirroring how
@@ -245,10 +297,10 @@ export const SANCTION_FIELDS = [
   // field — not derived-only — so a reviewer can type over it with the
   // figure the letter actually states, if that differs from the
   // calculation. Clearing the box back to empty resumes auto-calculation.
-  { key: 'dsraAmount', group: 'Financial Covenants', label: 'DSRA Amount (Cr)',
+  { key: 'dsraAmount', group: 'Conditions & Covenants', label: 'DSRA Amount (Cr)',
     kind: 'money', align: 'right', width: 140, listHidden: true,
     hint: 'Auto-filled from the DSRA requirement above and the repayment schedule — edit to override.' },
-  { key: 'isra', group: 'Financial Covenants', label: 'ISRA',
+  { key: 'isra', group: 'Conditions & Covenants', label: 'ISRA',
     kind: 'text', textarea: true, placeholder: 'As printed in the letter', width: 170 },
   // Same auto-fill/editable split as DSRA above. When the letter has no
   // separate ISRA clause, the auto-filled suggestion is the interest
@@ -256,16 +308,16 @@ export const SANCTION_FIELDS = [
   // contractual requirement unless the letter actually states one (see
   // israIsContractual on the derived panel / SanctionFormModal's hint
   // override for this field).
-  { key: 'israAmount', group: 'Financial Covenants', label: 'ISRA Amount (Cr)',
+  { key: 'israAmount', group: 'Conditions & Covenants', label: 'ISRA Amount (Cr)',
     kind: 'money', align: 'right', width: 140, listHidden: true,
     hint: 'Auto-filled. If ISRA is not separately stated, this is the interest component of the DSRA calculation.' },
-  { key: 'cashSweep', group: 'Financial Covenants', label: 'Cash Sweep',
+  { key: 'cashSweep', group: 'Conditions & Covenants', label: 'Cash Sweep',
     kind: 'text', textarea: true, wide: true, placeholder: '100% above 1.30x DSCR', width: 300 },
 
-  // ── Base Case Assumptions ──
-  { key: 'plfPct', group: 'Base Case Assumptions', label: 'PLF (%)',
+  // ── 12 Additional Information ──
+  { key: 'plfPct', group: 'Additional Information', label: 'PLF (%)',
     kind: 'pct', placeholder: '24.5', align: 'right', width: 90 },
-  { key: 'tariffPerUnit', group: 'Base Case Assumptions', label: 'Tariff',
+  { key: 'tariffPerUnit', group: 'Additional Information', label: 'Tariff',
     kind: 'text', placeholder: '2.53', suffix: '₹ / kWh', align: 'right', width: 110 },
 ];
 

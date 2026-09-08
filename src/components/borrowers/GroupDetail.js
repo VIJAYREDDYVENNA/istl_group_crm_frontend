@@ -1034,20 +1034,17 @@ const GroupDetail = () => {
             ? { groupId: group.id, groupName: group.groupName, type: isParent ? 'GROUP' : 'SUB_GROUP' }
             : null}
           onClose={() => setMatchStep(null)}
-          onResolved={(borrowerId, meta) => {
-            setReview({
-              initial: matchStep.parsed, file: matchStep.file, borrowerId,
-              isNewBorrower: !!meta?.isNewBorrower,
-            });
+          // Neither callback resolves/creates anything itself any more —
+          // `pending` just carries the reviewer's choice through to
+          // SanctionFormModal, the only place any of it gets written,
+          // bundled atomically with the sanction on Save. See
+          // CompanyMatchModal's own handleConfirm comment.
+          onResolved={(pending) => {
+            setReview({ initial: matchStep.parsed, file: matchStep.file, pending });
             setMatchStep(null);
           }}
-          onResolvedGroup={(resolvedGroupTarget, meta) => {
-            setReview({
-              initial: matchStep.parsed,
-              file: matchStep.file,
-              groupTarget: resolvedGroupTarget,
-              isNewGroup: !!meta?.isNewGroup,
-            });
+          onResolvedGroup={(pending) => {
+            setReview({ initial: matchStep.parsed, file: matchStep.file, pending });
             setMatchStep(null);
           }}
         />
@@ -1056,23 +1053,22 @@ const GroupDetail = () => {
       {review && (
         <SanctionFormModal
           mode="import"
-          borrowerId={review.borrowerId}
-          isNewBorrower={review.isNewBorrower}
-          groupTarget={review.groupTarget}
-          isNewGroup={review.isNewGroup}
+          pending={review.pending}
           initial={review.initial}
           file={review.file}
           onClose={() => setReview(null)}
           onSaved={(saved) => {
             setReview(null);
             reload();
-            // A brand-new Group/Sub Group created for this import may not be
-            // the one this page is currently showing — go there instead of
-            // just reloading whatever's on screen, so the reviewer actually
-            // sees what they just created.
-            if (review.isNewGroup && saved?.groupId) {
+            // A group-target save may not be the group this page is
+            // currently showing — go there instead of just reloading
+            // whatever's on screen, so the reviewer actually sees what they
+            // just created. saved.groupId alone isn't a safe discriminator
+            // (a company sanction's own wrapper can carry a truthy groupId
+            // too, for a company that simply belongs to a group).
+            if (review.pending?.kind === 'GROUP' && saved?.groupId) {
               navigate(`/lender/borrowers/group/${saved.groupId}`);
-            } else if (saved?.id && !review.groupTarget) {
+            } else if (saved?.id) {
               navigate(`/lender/borrowers/${saved.id}`);
             }
           }}

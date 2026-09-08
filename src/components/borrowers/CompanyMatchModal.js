@@ -31,11 +31,13 @@
 // exclusive with Subsidiary/SPV (by definition); Subsidiary + SPV together
 // remains fully supported, unchanged.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, {
+  useEffect, useMemo, useRef, useState,
+} from 'react';
 import { X, Check, Building2, AlertTriangle } from 'lucide-react';
 import borrowerApi from '../../services/borrowerApi';
-import { BORROWER_IMPORT_KEYS } from './borrowerFields';
-import HierarchyPicker, { EMPTY_HIERARCHY, resolveHierarchyGroupId } from './HierarchyPicker';
+import { BORROWER_IMPORT_KEYS, toCin } from './borrowerFields';
+import HierarchyPicker, { EMPTY_HIERARCHY } from './HierarchyPicker';
 import '../../pages-css/BorrowerRegistry.css';
 
 // Same-shape, lighter-weight normalizers than the backend's own (which the
@@ -101,7 +103,6 @@ const CompanyMatchModal = ({
   const [matchDecision, setMatchDecision] = useState(null); // null | 'USE_MATCH' | 'NEW_COMPANY'
 
   const [dupes, setDupes] = useState([]);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   const identity = useMemo(() => {
@@ -161,42 +162,83 @@ const CompanyMatchModal = ({
   const subGroupSelected = !!(hierarchy.subGroupId || hierarchy.newSubName?.trim());
   const anyTypeSelected = typeStandalone || !!hierarchy.isSubsidiary || !!hierarchy.isSpv;
 
-  const runDuplicateCheck = async (borrowerId) => {
-    if (!parsed?.lenderName || !parsed?.sanctionDate) return;
-    try {
-      const hits = await borrowerApi.checkDuplicateSanction(
-        borrowerId, parsed.lenderName, parsed.sanctionDate,
-      );
-      setDupes(hits);
-    } catch { /* advisory only — never blocks confirm */ }
-  };
+  // When no Company Type is checked, the sanction attaches directly to the
+  // Group/Sub Group itself (see resolveGroupTarget below) — that group IS
+  // the entity the letter names, so a brand-new group being typed here
+  // should inherit the letter's own extracted CIN/address rather than leave
+  // the reviewer to retype them. Only the DEEPEST new level is the actual
+  // sanctioned entity (a Sub Group, if one is being created, is always the
+  // target — never its Parent, even though the Parent is created alongside
+  // it), matching resolveGroupTarget's own precedence below. Tracks which
+  // field it last wrote to (and what it wrote) so that if the reviewer adds
+  // a Sub Group *after* the Parent was auto-filled, the now-wrong Parent
+  // value is cleared rather than left stuck on both fields at once — but
+  // only ever undoes its own writes, never something the reviewer typed.
+  const autoFillRef = useRef({ cinField: null, cinValue: null, addrField: null, addrValue: null });
+  useEffect(() => {
+    if (anyTypeSelected) return;
+    const cin = parsed?.cin ? toCin(parsed.cin) : '';
+    const address = parsed?.registeredAddress?.trim() || '';
 
-  /**
-   * Case 7/9/11/13: a Group or Sub Group is selected and no company type is
-   * checked — the sanction attaches directly to it, no company involved.
-   * Reuses resolveHierarchyGroupId exactly as every other screen that turns
-   * this same picker's state into a concrete group id does — the deepest
-   * level (Sub Group, if any) wins, matching resolveHierarchyGroupId's own
-   * precedence.
-   */
-  const resolveGroupTarget = async () => {
-    const groupId = await resolveHierarchyGroupId(hierarchy);
-    if (!groupId) return null;
-    if (subGroupSelected) {
-      return {
-        groupId,
-        groupName: hierarchy.subGroupName || hierarchy.newSubName.trim(),
-        type: 'SUB_GROUP',
-        isNewGroup: !hierarchy.subGroupId,
-      };
+    const subIsNew = subGroupSelected && hierarchy.newSubName?.trim() && !hierarchy.subGroupId;
+    const parentIsNew = groupSelected && hierarchy.newParentName?.trim() && !hierarchy.parentGroupId;
+    const targetField = subIsNew ? 'sub' : (parentIsNew ? 'parent' : null);
+
+    setHierarchy((h) => {
+      let next = h;
+      const ref = autoFillRef.current;
+
+      if (ref.cinField && ref.cinField !== targetField) {
+        const key = ref.cinField === 'sub' ? 'newSubCin' : 'newParentCin';
+        if (next[key] === ref.cinValue) next = { ...next, [key]: '' };
+        ref.cinField = null; ref.cinValue = null;
+      }
+      if (ref.addrField && ref.addrField !== targetField) {
+        const key = ref.addrField === 'sub' ? 'newSubAddress' : 'newParentAddress';
+        if (next[key] === ref.addrValue) next = { ...next, [key]: '' };
+        ref.addrField = null; ref.addrValue = null;
+      }
+      if (targetField && cin) {
+        const key = targetField === 'sub' ? 'newSubCin' : 'newParentCin';
+        if (!next[key]) {
+          next = { ...next, [key]: cin };
+          ref.cinField = targetField; ref.cinValue = cin;
+        }
+      }
+      if (targetField && address) {
+        const key = targetField === 'sub' ? 'newSubAddress' : 'newParentAddress';
+        if (!next[key]) {
+          next = { ...next, [key]: address };
+          ref.addrField = targetField; ref.addrValue = address;
+        }
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    parsed?.cin, parsed?.registeredAddress, anyTypeSelected, groupSelected, subGroupSelected,
+    hierarchy.newParentName, hierarchy.newSubName,
+    hierarchy.parentGroupId, hierarchy.subGroupId,
+  ]);
+
+  // Advisory-only "you're about to import a second letter from the same
+  // lender on the same day" check — runs the moment the reviewer picks an
+  // existing match, using the candidate's own borrowerId directly (no
+  // resolve() call needed, unlike before: that call no longer happens until
+  // Save). Only meaningful for an EXISTING company; a brand-new one can't
+  // already have a conflicting sanction on file.
+  useEffect(() => {
+    if (matchDecision !== 'USE_MATCH' || !parsed?.lenderName || !parsed?.sanctionDate) {
+      setDupes([]);
+      return;
     }
-    return {
-      groupId,
-      groupName: hierarchy.parentGroupName || hierarchy.newParentName?.trim() || '',
-      type: 'GROUP',
-      isNewGroup: !hierarchy.parentGroupId,
-    };
-  };
+    let cancelled = false;
+    borrowerApi.checkDuplicateSanction(candidates[0].borrowerId, parsed.lenderName, parsed.sanctionDate)
+      .then((hits) => { if (!cancelled) setDupes(hits); })
+      .catch(() => { /* advisory only — never blocks confirm */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchDecision, candidates, parsed?.lenderName, parsed?.sanctionDate]);
 
   const canConfirm = () => {
     if (hasMatch) {
@@ -207,73 +249,58 @@ const CompanyMatchModal = ({
     return !!name.trim();
   };
 
-  const handleConfirm = async () => {
+  /**
+   * NO PERSISTENCE HERE — this used to call borrowerApi.resolve /
+   * resolveWithHierarchy / createGroup immediately, committing the company
+   * (and any new group) to the database before the sanction was ever saved.
+   * If the reviewer then cancelled the "Review what was read" screen, that
+   * company/group was left behind with zero sanctions (best-effort client
+   * delete on cancel, not atomic — a closed tab or crash still orphaned it).
+   *
+   * Now this just hands the reviewer's choice up as plain data — a
+   * `pending` descriptor — and SanctionFormModal's own Save is the ONLY
+   * place any of this is written, bundling the company/group resolution
+   * and the sanction into ONE backend call (see BorrowerService's
+   * maybePersistAttachedSanction for the company/matched-company cases,
+   * both fully transactional; the group-only case still runs
+   * resolveHierarchyGroupId + saveGroupSanction as two calls, but now only
+   * at Save time, never before — see the 2026-09-07 no-persistence-before-
+   * Save fix).
+   */
+  const handleConfirm = () => {
     setError('');
-    setSaving(true);
-    try {
-      if (hasMatch && matchDecision === 'USE_MATCH') {
-        const matched = candidates[0];
-        // resolve() only ever fills blanks on the existing borrower — its
-        // hierarchy, company type, and every other saved field are left
-        // exactly as they are, and its id is preserved. Resolved by the
-        // matched company's own saved name (never the letter's spelling of
-        // it), so the lookup always hits an exact match.
-        const resolved = await borrowerApi.resolve({ ...identity, borrowerName: matched.borrowerName });
-        await runDuplicateCheck(resolved.id);
-        onResolved(resolved.id, { isNewBorrower: false });
-        return;
-      }
-
-      if (groupSelected && !anyTypeSelected) {
-        const target = await resolveGroupTarget();
-        if (!target) { setError('Select or create a Parent Group'); setSaving(false); return; }
-        onResolvedGroup(
-          { groupId: target.groupId, groupName: target.groupName, type: target.type },
-          { isNewGroup: target.isNewGroup },
-        );
-        return;
-      }
-
-      if (!name.trim()) { setError('Company name is required'); setSaving(false); return; }
-      // One atomic backend call — it creates the Parent/Sub Group itself (if
-      // a new name was typed), resolves the borrower (finds it by exact
-      // name if it already exists, creates it otherwise) and applies the
-      // hierarchy/type, all in one transaction.
-      const resolved = await borrowerApi.resolveWithHierarchy(
-        { ...identity, borrowerName: name.trim() },
-        {
-          parentGroupId: hierarchy.parentGroupId,
-          newParentGroupName: hierarchy.newParentName,
-          newParentGroupCin: hierarchy.newParentCin,
-          newParentGroupAddress: hierarchy.newParentAddress,
-          subGroupId: hierarchy.subGroupId,
-          newSubGroupName: hierarchy.newSubName,
-          newSubGroupCin: hierarchy.newSubCin,
-          newSubGroupAddress: hierarchy.newSubAddress,
-          isSubsidiary: !!hierarchy.isSubsidiary,
-          isSpv: !!hierarchy.isSpv,
-        },
-      );
-      await runDuplicateCheck(resolved.id);
-      // Never a fixed true/false — resolveWithHierarchy silently reuses an
-      // existing borrower found by exact name (updating its hierarchy/type
-      // to whatever this form shows) rather than creating a new one. A
-      // returned id matching one of the original match candidates means
-      // that's exactly what happened here, so the caller's cleanup-on-
-      // cancel must NOT delete it as an orphan — only a genuinely fresh id
-      // (no match existed, or the reviewer edited the name/identity away
-      // from it) is a "just created for this import" borrower.
-      const isNewBorrower = !candidates.some((c) => c.borrowerId === resolved.id);
-      onResolved(resolved.id, { isNewBorrower });
-    } catch (e) {
-      setError(e.message || 'Could not resolve the destination');
-    } finally {
-      setSaving(false);
+    if (hasMatch && matchDecision === 'USE_MATCH') {
+      const matched = candidates[0];
+      onResolved({ kind: 'MATCH', identity: { ...identity, borrowerName: matched.borrowerName } });
+      return;
     }
+
+    if (groupSelected && !anyTypeSelected) {
+      if (subGroupSelected ? !(hierarchy.subGroupId || hierarchy.newSubName?.trim())
+        : !(hierarchy.parentGroupId || hierarchy.newParentName?.trim())) {
+        setError('Select or create a Parent Group');
+        return;
+      }
+      const groupName = subGroupSelected
+        ? (hierarchy.subGroupName || hierarchy.newSubName.trim())
+        : (hierarchy.parentGroupName || hierarchy.newParentName?.trim() || '');
+      onResolvedGroup({
+        kind: 'GROUP', hierarchy: { ...hierarchy }, groupName,
+        type: subGroupSelected ? 'SUB_GROUP' : 'GROUP',
+      });
+      return;
+    }
+
+    if (!name.trim()) { setError('Company name is required'); return; }
+    onResolved({
+      kind: 'COMPANY',
+      identity: { ...identity, borrowerName: name.trim() },
+      hierarchy: { ...hierarchy },
+    });
   };
 
   return (
-    <div className="br-modal-backdrop" onMouseDown={onClose}>
+    <div className="br-modal-backdrop">
       <div className="br-modal" onMouseDown={(e) => e.stopPropagation()}
         role="dialog" aria-modal="true" aria-label="Confirm company">
         <div className="br-modal-head">
@@ -417,14 +444,14 @@ const CompanyMatchModal = ({
         {error && <div className="br-banner br-banner-danger">{error}</div>}
 
         <div className="br-modal-foot">
-          <button type="button" className="br-btn" onClick={onClose} disabled={saving}>Cancel</button>
+          <button type="button" className="br-btn" onClick={onClose}>Cancel</button>
           <button
             type="button" className="br-btn br-btn-primary"
             onClick={handleConfirm}
-            disabled={saving || loading || !canConfirm()}
+            disabled={loading || !canConfirm()}
           >
             <Check size={15} aria-hidden="true" />
-            {saving ? 'Confirming…' : 'Confirm and continue'}
+            Confirm and continue
           </button>
         </div>
       </div>

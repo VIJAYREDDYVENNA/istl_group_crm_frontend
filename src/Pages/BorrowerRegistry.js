@@ -515,20 +515,17 @@ const BorrowerRegistry = () => {
         <CompanyMatchModal
           parsed={matchStep.parsed}
           onClose={() => setMatchStep(null)}
-          onResolved={(borrowerId, meta) => {
-            setReview({
-              initial: matchStep.parsed, file: matchStep.file, borrowerId,
-              isNewBorrower: !!meta?.isNewBorrower,
-            });
+          // Neither callback resolves/creates anything itself any more (see
+          // CompanyMatchModal's own handleConfirm comment) — `pending`
+          // just carries the reviewer's choice through to SanctionFormModal,
+          // which is the only place any of it gets written, bundled
+          // atomically with the sanction on Save.
+          onResolved={(pending) => {
+            setReview({ initial: matchStep.parsed, file: matchStep.file, pending });
             setMatchStep(null);
           }}
-          onResolvedGroup={(resolvedGroupTarget, meta) => {
-            setReview({
-              initial: matchStep.parsed,
-              file: matchStep.file,
-              groupTarget: resolvedGroupTarget,
-              isNewGroup: !!meta?.isNewGroup,
-            });
+          onResolvedGroup={(pending) => {
+            setReview({ initial: matchStep.parsed, file: matchStep.file, pending });
             setMatchStep(null);
           }}
         />
@@ -537,10 +534,7 @@ const BorrowerRegistry = () => {
       {review && (
         <SanctionFormModal
           mode="import"
-          borrowerId={review.borrowerId}
-          isNewBorrower={review.isNewBorrower}
-          groupTarget={review.groupTarget}
-          isNewGroup={review.isNewGroup}
+          pending={review.pending}
           initial={review.initial}
           file={review.file}
           onClose={() => setReview(null)}
@@ -548,13 +542,14 @@ const BorrowerRegistry = () => {
             setReview(null);
             loadHierarchy();
             showSuccess('Sanction letter saved to the registry.', 'Saved');
-            // A brand-new Parent/Sub Group created for this import (never
-            // reachable here before — this page has no groupTarget of its
-            // own to start from) has no company row to land on; go to the
-            // group itself instead.
-            if (review.isNewGroup && saved?.groupId) {
+            // A group-target save (pending.kind === 'GROUP') has no company
+            // row to land on — go to the group itself. saved.groupId alone
+            // isn't a safe discriminator here: a company sanction's own
+            // wrapper can carry a truthy groupId too, for a company that
+            // simply belongs to a group.
+            if (review.pending?.kind === 'GROUP' && saved?.groupId) {
               navigate(`/lender/borrowers/group/${saved.groupId}`);
-            } else if (saved?.id && !review.groupTarget) {
+            } else if (saved?.id) {
               // Land on the record just created — that is where the derived
               // panel shows what the import worked out.
               navigate(`/lender/borrowers/${saved.id}`);

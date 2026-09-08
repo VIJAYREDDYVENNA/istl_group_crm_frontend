@@ -463,25 +463,30 @@ const RepaymentScheduleTab = ({
                   <strong>Moratorium Period</strong> ({formatDate(moratoriumStart)} – {moratoriumEnd})
                 </span>
               )}
+              {/* Explains the green repayment-row color the moment both
+                  colors are actually on screen (a moratorium period AND at
+                  least one repayment row) — always shown alongside
+                  Moratorium Period above, same as that chip, never gated
+                  behind the DSRA/ISRA or detailed-interest-breakdown
+                  permissions: it's just naming a row color, not revealing a
+                  restricted figure. */}
+              {moratoriumPeriods.length > 0 && rows.length > moratoriumPeriods.length && (
+                <span className="br-schedule-period-legend-item br-schedule-table-heading-legend-item">
+                  <TrendingUp size={13} className="br-period-badge-repayment" aria-hidden="true" />
+                  <span className="br-schedule-repayment-swatch" aria-hidden="true" />
+                  <strong>Repayment (P+I)</strong> — Principal + Interest
+                </span>
+              )}
               {/* Only when this schedule actually has a term crossing the
-                  boundary — explains the two colors that pair together in
-                  that case (amber split rows, green ordinary repayment
-                  rows) right next to the Moratorium Period chip above,
-                  rather than making the reviewer scroll to the bottom
-                  legend to learn what the split rows they're about to see
-                  mean. */}
+                  boundary — explains the amber split-row color that pairs
+                  with the two legend items above in that case, rather than
+                  making the reviewer scroll to the bottom legend to learn
+                  what the split row they're about to see means. */}
               {showDetailedInterest && splitNotes.length > 0 && (
-                <>
-                  <span className="br-schedule-period-legend-item br-schedule-table-heading-legend-item">
-                    <span className="br-schedule-split-swatch" aria-hidden="true" />
-                    <strong>Partially in Moratorium</strong> — One repayment term crosses the moratorium boundary
-                  </span>
-                  <span className="br-schedule-period-legend-item br-schedule-table-heading-legend-item">
-                    <TrendingUp size={13} className="br-period-badge-repayment" aria-hidden="true" />
-                    <span className="br-schedule-repayment-swatch" aria-hidden="true" />
-                    <strong>Repayment (P+I)</strong> — Principal + Interest
-                  </span>
-                </>
+                <span className="br-schedule-period-legend-item br-schedule-table-heading-legend-item">
+                  <span className="br-schedule-split-swatch" aria-hidden="true" />
+                  <strong>Partially in Moratorium</strong> — One repayment term crosses the moratorium boundary
+                </span>
               )}
             </div>
           )}
