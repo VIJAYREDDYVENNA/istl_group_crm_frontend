@@ -23,13 +23,62 @@
  *      weights instead of the equal split. Nothing else about the tab's weight
  *      behaviour (auto-distribution, pinning, snapping, validation) changed.
  *    • loadDefaultPlan() also carries the template's SUB-ITEM breakdown, and is a
- *      name-matched merge rather than a wholesale replace: a phase or sub-item
- *      whose name is still in the standard keeps its id, dates, progress and
- *      budget. This matters because a sub-item has no id anywhere — its name is
- *      the key for project_progress_periods.sub_item_key and for the planned-
- *      budget merge in ProjectDetailService.saveScopeBudgets, both of which
- *      compare with an exact String.equals. A matched row therefore keeps its
- *      STORED spelling; only description/weight are refreshed from the template.
+ *      merge rather than a wholesale replace: a phase or node that is still in
+ *      the standard keeps its id, dates, progress and budget.
+ *    • [2026-09-07] The sub-item breakdown is a TREE of arbitrary depth, not one
+ *      flat level, and it is edited by the SHARED components/Leads/ScopeTreeEditor
+ *      rather than by this file's own sub-item <tr>s (which are gone). Three
+ *      hand-maintained copies of a recursive editor would have been three sets of
+ *      nesting bugs. The progress cells are passed in through its renderExtra prop,
+ *      because they are the one part that is genuinely project-specific.
+ *    • [2026-09-07] A node's identity is its `id` (a UUID), NOT its name.
+ *      project_progress_periods.sub_item_key and the planned-budget merge in
+ *      ProjectDetailService.saveScopeBudgets both key off that id, so renaming a
+ *      node is safe and two nodes sharing a name in different branches stay
+ *      separate. The merge matches by id first, name second, within each parent,
+ *      and recurses. Existing rows were re-keyed by ScopeNodeIdMigrationRunner.
+ *    • [2026-09-07] This file's OWN weight engine (distributeSubWeights /
+ *      snapSubGroup / resetSubWeights, and the ±0.5 blur-snap with a 0.01 gate) was
+ *      REMOVED in favour of utils/scopeWeights.js via utils/scopeTree.js — the same
+ *      engine the templates and lead screens use. The two had already drifted to
+ *      different tolerances, and nesting would have required maintaining both at
+ *      every level. The blur-snap is gone because it is no longer needed: typing a
+ *      weight rebalances the group immediately.
+ *    • [2026-09-07] Roll-ups (progress) and sums (capital, budget) walk the whole
+ *      tree. A node with children reports its children, never its own stale value.
+ *    • [2026-09-07] PER-NODE SCHEDULING. The sub-item start/end date inputs and the
+ *      status select that this file used to render were lost when the flat <tr>s
+ *      became ScopeTreeEditor; both are restored via renderExtra, and scheduling is
+ *      now per node at every level. A node WITH children carries its own span plus a
+ *      Weekly/Monthly choice, which is the period grid its children sit on; a leaf
+ *      takes dates, and those dates now DRIVE its period range (they were stored but
+ *      read by nothing before). The controls live in the shared
+ *      components/Leads/NodeScheduleCell so the lead tab uses the same ones.
+ *    • [2026-09-07] parseDate / bucketCount / bucketLabel / bucketToISODate MOVED OUT
+ *      of this file to utils/scopeSchedule.js, which also adds dateToBucket (the
+ *      date→period inverse that did not exist) and bucketRange. They moved because
+ *      the lead scope tab needs the same arithmetic and must not import from this
+ *      hand-maintained port. This file imports them back.
+ *    • [2026-09-07] The phase save body now sends plannedStartDate / plannedEndDate /
+ *      planUnit. project_phases.planned_start_date and planned_end_date have existed
+ *      and been wired server-side all along, but the client omitted them, so
+ *      saveScope wrote NULL into both on EVERY save — a phase could not hold a date.
+ *    • [2026-09-08] The breakdown TREE no longer expands inline under the phase row
+ *      (the sub-item <tr>s are gone, again). A phase's whole nested tree opens in
+ *      components/Leads/ScopeBreakdownModal instead — ScopeTreeEditor's own
+ *      chevrons/indentation are unchanged, only where they render moved. Was extra
+ *      rows squeezed into the SAME table at whatever depth the tree reached, which
+ *      is exactly what made a phase with any real breakdown look congested. The
+ *      renderExtra callback (progress/schedule/status) moved with it unchanged;
+ *      only one phase's breakdown is viewable at a time now (`openBreakdown` state,
+ *      a row index, replaces the old per-row `p.expanded` boolean — that field is
+ *      left in blankPhase/load's data shape, just unread by this tab now).
+ *    • [2026-09-08] `utils/scopeTree.js`'s PASS_THROUGH allowlist was missing
+ *      plannedStartDate/plannedEndDate/planUnit, so hydrateTree/treeForSave/mergeTree
+ *      silently stripped a parent node's own span+unit on every load, save and
+ *      re-suggest. Fixed there (one array, three consumers, every host) — not a
+ *      change in this file, noted here because it explains why a node with its own
+ *      breakdown used to "forget" its schedule on reload.
  * ========================================================================== */
 // ============================================================================
 //  OrderBookDetailPage
@@ -53,13 +102,26 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import * as XLSXStyle from 'xlsx-js-style'; // style-capable SheetJS fork; used only for the colored export
-import { ArrowLeft, Plus, Trash2, Save, Wand2, Check, Download, RotateCcw } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Save, Wand2, Check, Download, RotateCcw, Maximize2 } from 'lucide-react';
 import { FaFilePdf, FaFileImage, FaFileAlt, FaFileDownload, FaExternalLinkAlt } from 'react-icons/fa';
 import '../../pages-css/OrderBookDetail.css';
 import ConfirmationModal from '../ConfirmationModal.js';
 import useConfirmationModal from '../HandleConfirmationModal.js';
 import LocationPicker from '../LocationPicker.js';
 import UnitSelectCell from '../Dropdowns/UnitSelectCell.js';
+import ScopeBreakdownModal from '../Leads/ScopeBreakdownModal.js';
+import NodeScheduleCell from '../Leads/NodeScheduleCell.js';
+import { distributeWeights, resetWeights } from '../../utils/scopeWeights.js';
+import {
+  blankNode, hydrateTree, validateTree, mergeTree,
+} from '../../utils/scopeTree.js';
+// Scheduling moved to utils/scopeSchedule.js so the lead scope tab can share it —
+// it must not import from this hand-maintained port. parseDate / bucketCount /
+// bucketLabel / bucketToISODate used to live here at module scope.
+import {
+  parseDate, bucketCount, bucketLabel, bucketToISODate,
+  nodeGrid, validateSchedule,
+} from '../../utils/scopeSchedule.js';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL;
 
@@ -73,48 +135,15 @@ const fmtMoney = n => {
 // The Work Breakdown & Schedule grid is divided into buckets (weeks or months)
 // spanning the plan's start→end dates. Phases store start/end BUCKET NUMBERS;
 // the real dates shown under the grid are computed from the plan start + unit.
-const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 // Tolerant date parser: accepts ISO (yyyy-mm-dd, what <input type=date> emits and
 // what the backend LocalDate serializes to) AND dd-mm-yyyy / dd/mm/yyyy (what may
 // have been stored earlier or come from a display layer). Returns a Date or null.
-const parseDate = (v) => {
-  if (!v) return null;
-  if (v instanceof Date) return isNaN(v) ? null : v;
-  const str = String(v).trim();
-  // ISO: yyyy-mm-dd (optionally with time)
-  let m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) { const d = new Date(+m[1], +m[2] - 1, +m[3]); return isNaN(d) ? null : d; }
-  // dd-mm-yyyy or dd/mm/yyyy
-  m = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
-  if (m) { const d = new Date(+m[3], +m[2] - 1, +m[1]); return isNaN(d) ? null : d; }
-  const d = new Date(str); // last resort
-  return isNaN(d) ? null : d;
-};
 
 // How many buckets between start and end for the given unit. Returns 0 when the
 // dates are missing/invalid (caller treats 0 as "not set" — no misleading default).
-const bucketCount = (startStr, endStr, unit) => {
-  const s = parseDate(startStr), e = parseDate(endStr);
-  if (!s || !e || e < s) return 0;
-  if (unit === 'MONTH') {
-    return Math.max(1, (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth()) + 1);
-  }
-  const days = Math.round((e - s) / (1000 * 60 * 60 * 24));
-  return Math.max(1, Math.ceil((days + 1) / 7));
-};
 
 // Label for bucket index n (0-based): weekly → "10 Jun", monthly → "Jun 2026".
-const bucketLabel = (startStr, n, unit) => {
-  const s = parseDate(startStr);
-  if (!s) return unit === 'MONTH' ? `M${n + 1}` : `W${n + 1}`;
-  if (unit === 'MONTH') {
-    const d = new Date(s.getFullYear(), s.getMonth() + n, 1);
-    return `${MONTH_ABBR[d.getMonth()]} ${d.getFullYear()}`;
-  }
-  const d = new Date(s); d.setDate(d.getDate() + n * 7);
-  return `${d.getDate()} ${MONTH_ABBR[d.getMonth()]}`;
-};
 
 const PHASE_SUGGESTIONS = [
   // Engineering & pre-construction
@@ -139,16 +168,6 @@ const PHASE_SUGGESTIONS = [
 
 // ISO date (yyyy-mm-dd) for the START of bucket index n (0-based). Used to
 // auto-fill finance line dates from a phase's bucket position.
-const bucketToISODate = (startStr, n, unit) => {
-  const s = parseDate(startStr);
-  if (!s || n == null || n < 0) return '';
-  const d = unit === 'MONTH'
-    ? new Date(s.getFullYear(), s.getMonth() + n, 1)
-    : (() => { const x = new Date(s); x.setDate(x.getDate() + n * 7); return x; })();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${mm}-${dd}`;
-};
 
 // Fractional grid position (0..1) of a calendar date across the plan span,
 // for placing single-date markers on the same week/month grid. null if undatable.
@@ -522,7 +541,15 @@ const blankPhase = (seq) => ({
   expanded: false, // UI-only: collapse/expand sub-items
 });
 
-const blankSubItem = () => ({ name: '', status: 'Not Started', progressPercent: 0, weightPct: '', weightManual: false, description: '', startDate: '', endDate: '', startWeek: '', endWeek: '', customName: false });
+// A project phase's scope node: the shared definition fields (via blankNode, which
+// also mints the node's id) plus the EXECUTION fields only a running project has.
+// The id is what progress and budget key off — never the name, which two nodes in
+// different branches may legitimately share. See utils/scopeTree.js.
+const blankSubItem = () => ({
+  ...blankNode(),
+  status: 'Not Started', progressPercent: 0,
+  startDate: '', endDate: '', startWeek: '', endWeek: '', customName: false,
+});
 
 const PHASE_STATUSES = ['Not Started', 'In Progress', 'Completed', 'Delayed', 'On Hold'];
 // Manual statuses that OVERRIDE the progress-driven auto status (they stick until
@@ -558,6 +585,14 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
   const [progress, setProgress] = useState({});
   const [savingProgress, setSavingProgress] = useState(false);
   const [weekModalLeaf, setWeekModalLeaf] = useState(null); // {phaseId, subKey, label, ...} or null
+  // Which phase's breakdown is open in ScopeBreakdownModal — a row INDEX, or
+  // null. Replaces the old per-row `p.expanded` inline toggle: a deep tree
+  // rendered as extra <tr>s squeezed under the phase row (in the SAME table,
+  // at whatever indentation it reached) is exactly what made this table look
+  // congested. Only one breakdown is viewable at a time now, which a modal
+  // makes the natural shape rather than a loss — the old inline view was
+  // already unreadable past one phase expanded at any useful depth.
+  const [openBreakdown, setOpenBreakdown] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   // Index of a phase row the user just switched to "type your own". Only that
@@ -622,10 +657,20 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
             } else {
               subItems = subItems.map(si => ({ ...si, weightManual: si.weightManual === true }));
             }
+            // Then hydrate the whole TREE: fills in missing fields at every depth,
+            // rebalances each group, and gives an id to any node that arrived
+            // without one. That last part is what carries a project saved before
+            // the node-id migration — its nodes become id-keyed on the next save,
+            // and until then the name fallback in the merge still finds them.
+            subItems = hydrateTree(subItems);
           }
           return {
             id: p.id, seqNo: p.seqNo, phaseName: p.phaseName, phaseDescription: p.phaseDescription || '',
             startWeek: p.startWeek ?? '', endWeek: p.endWeek ?? '',
+            // The phase span the client never used to send back (see save).
+            plannedStartDate: p.plannedStartDate || '',
+            plannedEndDate: p.plannedEndDate || '',
+            planUnit: p.planUnit || '',
             customName: !PHASE_SUGGESTIONS.includes(p.phaseName),
             status: p.status || 'Not Started', progressPercent: p.progressPercent != null ? Number(p.progressPercent) : 0,
             plannedProgressPct: p.plannedProgressPct != null ? Number(p.plannedProgressPct) : '',
@@ -695,44 +740,23 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
   // phase_id). Matching by name keeps a phase that is still in the standard, so
   // its weekly progress, its planned budget and its BOM links survive.
   //
-  // Sub-items matter even more here: they have no id at all, so their NAME is the
-  // key for project_progress_periods.sub_item_key and for the planned-budget merge
-  // in ProjectDetailService.saveScopeBudgets — which compares with an exact
-  // String.equals. So a matched sub-item keeps its STORED spelling and its
-  // execution fields; only the definition (description/weight) is refreshed.
+  // The breakdown matters even more here, and it is now a TREE. Each node carries a
+  // stable id, and project_progress_periods.sub_item_key plus the planned-budget
+  // merge in ProjectDetailService.saveScopeBudgets both key off THAT id — not off
+  // the name, which two nodes in different branches may legitimately share. So a
+  // matched node keeps its id and its execution fields, and only the definition
+  // (description / weight) is refreshed from the standard.
   //
-  // Matching is trim + lowercase, the same normalisation the backend's
-  // ProjectLeadSeedService.activityKey uses.
-  const nameKey = (v) => String(v == null ? '' : v).trim().toLowerCase();
+  // Matching happens WITHIN EACH PARENT and then recurses, by id first and by name
+  // as the fallback that carries pre-migration nodes through their first merge.
+  // Matching globally by name would pair the "Excavation" under Civil with the one
+  // under Substation and move a year of progress into the wrong branch.
+  //
+  // mergeTree (utils/scopeTree.js) is that rule, shared with the lead tab and
+  // mirrored server-side by ScopeSubItems.mergePreservingExecutionData.
+  const nameKey = (v) => String(v == null ? "" : v).trim().toLowerCase();
 
-  const mergeSuggestedSubs = (prior, incoming) => {
-    const inc = incoming || [];
-    if (!inc.length) return [];
-    const byKey = new Map();
-    (prior || []).forEach(si => {
-      const k = nameKey(si.name);
-      if (k && !byKey.has(k)) byKey.set(k, si); // first wins; duplicate names are possible
-    });
-    return distributeSubWeights(inc.map(si => {
-      const was = byKey.get(nameKey(si.name));
-      const base = {
-        ...blankSubItem(),
-        name: si.name || '',
-        description: si.description || '',
-        weightPct: si.weightPct != null ? Number(si.weightPct) : '',
-        weightManual: si.weightManual === true,
-        customName: !ACTIVITY_OPTIONS.includes(si.name),
-      };
-      if (!was) return base;
-      return {
-        ...was,                                   // status, progress, dates, budget
-        name: was.name,                           // stored spelling is the identity
-        description: si.description || was.description,
-        weightPct: base.weightPct === '' ? was.weightPct : base.weightPct,
-        weightManual: base.weightManual || was.weightManual === true,
-      };
-    }));
-  };
+  const mergeSuggestedSubs = (prior, incoming) => mergeTree(prior, incoming);
 
   const loadDefaultPlan = async () => {
     if (phases.length) {
@@ -837,89 +861,106 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
 
   const updatePhase = (i, field, val, extra) => setPhases(prev => prev.map((p, idx) => idx === i ? { ...p, [field]: val, ...(extra || {}) } : p));
 
-  // ── Auto weight distribution for sub-items (relative-to-parent, sum = 100) ──
-  // Manually-edited sub-items (weightManual === true) keep their value; the rest
-  // share whatever is left of 100 equally. This is what makes the system
-  // "auto-calc first, editable after" without clobbering the user's inputs.
-  const distributeSubWeights = (subItems) => {
-    const named = subItems.filter(si => si != null);
-    if (named.length === 0) return subItems;
-    const manual = named.filter(si => si.weightManual === true);
-    const manualSum = manual.reduce((s, si) => s + (Number(si.weightPct) || 0), 0);
-    const remaining = Math.max(0, 100 - manualSum);
-    // Indices (within subItems) of the auto sub-items, in order.
-    const autoIdx = subItems.map((si, idx) => ({ si, idx }))
-      .filter(x => x.si != null && x.si.weightManual !== true)
-      .map(x => x.idx);
-    const nAuto = autoIdx.length;
-    if (nAuto === 0) return subItems;
-    // Base share rounded to 2 decimals; the LAST auto sub absorbs the remainder
-    // so the auto portion sums to exactly `remaining` (and the group to 100).
-    const base = Number((remaining / nAuto).toFixed(2));
-    const lastAuto = autoIdx[autoIdx.length - 1];
-    const allButLast = base * (nAuto - 1);
-    const lastShare = Number((remaining - allButLast).toFixed(2));
-    return subItems.map((si, idx) => {
-      if (si == null || si.weightManual === true) return si;
-      return { ...si, weightPct: idx === lastAuto ? lastShare : base };
+  // ── Sub-item weights: now the SHARED engine, applied per parent at any depth ──
+  //
+  // This file used to carry its own copy of the weight rules (distributeSubWeights /
+  // snapSubGroup / resetSubWeights) while the templates and lead screens used
+  // utils/scopeWeights.js. The two had already drifted — this one snapped on blur
+  // within ±0.5 and gated at ±0.01, the other absorbed 0.005 per row — so the same
+  // breakdown could save on one screen and be rejected on another. Nesting made
+  // keeping both untenable: every rule would have needed writing twice, at every
+  // level. Both now run utils/scopeWeights.js through utils/scopeTree.js.
+  //
+  // What changes for a user here: the blur-snap is gone, because it is no longer
+  // needed — typing a weight rebalances the other rows immediately, so the group
+  // is never left off 100 to be snapped back later.
+  const updateSubTree = (i, next) => updatePhase(i, "subItems", next);
+
+  /**
+   * Set one field on the node with this id, wherever it is in the tree.
+   *
+   * Addressed by ID rather than by index because the progress inputs are rendered
+   * by the recursive editor, which knows the node but not the path back to the
+   * phase. An index would also be wrong the moment a branch above it was
+   * reordered — the id is the only stable handle.
+   */
+  const setNodeField = (nodes, id, key, value) => (nodes || []).map((n) => (
+    n.id === id
+      ? { ...n, [key]: value }
+      : { ...n, children: setNodeField(n.children, id, key, value) }
+  ));
+
+  /**
+   * The breakdown tree as the save payload, recursively.
+   *
+   * Drops unnamed nodes at every level (a half-typed row is not scope), and writes
+   * each node's progress from the right source: a LEAF from its own typed value or
+   * its weekly cells, a PARENT from the roll-up of its children. `children` is
+   * omitted for a leaf so it serialises exactly as it did before nesting existed.
+   */
+  const serialiseNodes = (nodes, p) => (nodes || [])
+    .filter(si => si.name && si.name.trim())
+    .map(si => {
+      const kids = kidsOf(si);
+      const children = serialiseNodes(si.children, p);
+      const actual = kids.length
+        ? rollUpNodes(kids, p, leafActualVal)
+        : (isSimple ? (Number(si.progressPercent) || 0) : leafActual(leafForSub(p, si)));
+      const planned = kids.length
+        ? rollUpNodes(kids, p, leafPlannedVal)
+        : (isSimple
+          ? (si.plannedProgressPct === '' || si.plannedProgressPct == null ? null : Number(si.plannedProgressPct))
+          : (si.plannedProgressPct ?? null));
+      return {
+        ...si,
+        progressPercent: isSimple ? actual : Math.round(actual),
+        plannedProgressPct: planned,
+        ...(children.length ? { children } : { children: undefined }),
+      };
     });
+
+  /** A parent node's status, read off its own breakdown rather than typed. */
+  const derivedNodeStatus = (node, p) => {
+    const a = rollUpNodes(kidsOf(node), p, leafActualVal);
+    if (a >= 99.995) return "Completed";
+    return a > 0 ? "In Progress" : "Not Started";
   };
-  // Add a sub-item, then re-even the auto-weighted ones so the group targets 100.
+
+  // ── Per-node scheduling ────────────────────────────────────────────────────
+  //
+  // A node that carries a span and a unit defines a GRID of week or month periods,
+  // and everything beneath it is placed on that grid. A node without one inherits
+  // its nearest scheduled ancestor's, falling back to the project header — which is
+  // exactly today's behaviour, so a project nobody has scheduled per-node behaves
+  // as it always did.
+  const projectGrid = nodeGrid({
+    plannedStartDate: scope.plannedStartDate,
+    plannedEndDate: scope.plannedEndDate,
+    planUnit: scope.planUnit,
+  });
+  /** The grid a PHASE's children sit on: the phase's own, else the project's. */
+  const phaseGrid = (p) => nodeGrid(p) || projectGrid;
+  /** The grid a node's children sit on: its own, else whatever it inherited. */
+  const gridUnder = (node, inherited) => nodeGrid(node) || inherited;
+
   const addSubItem = (i) => {
     const p = phases[i];
-    const next = distributeSubWeights([...(p.subItems || []), blankSubItem()]);
-    updatePhase(i, 'subItems', next, { expanded: true });
+    updatePhase(i, "subItems", distributeWeights([...(p.subItems || []), blankNode()]), { expanded: true });
   };
-  // Remove a sub-item, then re-even the remaining auto-weighted ones.
-  const removeSubItem = (i, si_i) => {
-    const p = phases[i];
-    const next = distributeSubWeights((p.subItems || []).filter((_, idx) => idx !== si_i));
-    updatePhase(i, 'subItems', next);
-  };
-  // Live edit while typing: mark the sub manual, update its value, and warn if
-  // the group is off 100 in EITHER direction. No snapping yet — snapping while
-  // the user is mid-type would make digits jump. Snap happens on blur.
-  const setSubWeight = (i, si_i, raw) => {
-    const p = phases[i];
-    const val = raw === '' ? '' : Math.max(0, Number(raw));
-    const updated = (p.subItems || []).map((si, idx) =>
-      idx === si_i ? { ...si, weightPct: val, weightManual: raw !== '' } : si);
-    const sum = updated.reduce((s, si) => s + (Number(si.weightPct) || 0), 0);
-    if (sum > 100.005) {
-      showError(`Sub-item weights under "${p.phaseName || 'this item'}" total ${sum.toFixed(2)}% — reduce to 100%.`);
-    } else if (sum < 99.995 && sum > 0) {
-      showError(`Sub-item weights under "${p.phaseName || 'this item'}" total ${sum.toFixed(2)}% — must add up to 100%.`);
-    }
-    updatePhase(i, 'subItems', updated);
-  };
-  // On blur: if the group is within a rounding whisker of 100 (±0.5), snap it
-  // to EXACTLY 100 by putting the delta on the last AUTO sub (or, if all subs
-  // are manual, on the one just edited). This is what lets a user type
-  // 33.33/33.33/33.33 and still save — the last one becomes 33.34. If the group
-  // is genuinely wrong (e.g. 90 or 110), it is left alone so save rejects it.
-  const snapSubGroup = (i, editedIdx) => {
-    const p = phases[i];
-    const subs = p.subItems || [];
-    if (subs.length === 0) return;
-    const sum = subs.reduce((s, si) => s + (Number(si.weightPct) || 0), 0);
-    if (sum === 0) return;
-    const delta = 100 - sum;
-    if (Math.abs(delta) > 0.5) return; // real mismatch — let the save gate catch it
-    if (Math.abs(delta) < 0.0001) return; // already exact
-    const autoIdxs = subs.map((si, idx) => ({ si, idx }))
-      .filter(x => x.si.weightManual !== true).map(x => x.idx);
-    const target = autoIdxs.length > 0 ? autoIdxs[autoIdxs.length - 1] : editedIdx;
-    const updated = subs.map((si, idx) => idx === target
-      ? { ...si, weightPct: Number(((Number(si.weightPct) || 0) + delta).toFixed(2)) }
-      : si);
-    updatePhase(i, 'subItems', updated);
-  };
-  // Reset a parent's sub-item weights back to equal auto-split.
+
+  /**
+   * Every sub-item edit routes through here: the editor hands back the whole tree
+   * for this phase, already rebalanced within whichever group changed.
+   */
+  const onSubTreeChange = (i, next) => updateSubTree(i, next);
+
+  // Reset a parent's DIRECT sub-item weights back to an equal auto-split. Deeper
+  // groups have their own Reset inside the editor, next to the group they affect.
   const resetSubWeights = (i) => {
     const p = phases[i];
-    const cleared = (p.subItems || []).map(si => ({ ...si, weightManual: false }));
-    updatePhase(i, 'subItems', distributeSubWeights(cleared));
+    updatePhase(i, "subItems", resetWeights(p.subItems || []));
   };
+
   const addPhase    = () => setPhases(prev => [...prev, blankPhase(prev.length + 1)]);
 
   // Pull BOM/BOQ lines in as sub-items under a phase, segregating the parent's
@@ -982,19 +1023,19 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
         showError(`"${p.phaseName}": end is before start`); return;
       }
     }
-    // A sub-item group MUST total 100% (it is relative-to-parent). Because
-    // auto-split and the blur-snap both resolve to exactly 100, a genuine
-    // rounding case never reaches here; only a real mismatch (e.g. 90 or 110)
-    // gets blocked. Tiny epsilon guards against float noise.
+    // EVERY group in the tree must total 100% of its own parent, at every level.
+    // validateTree walks the whole breakdown and names the specific branch — "Under
+    // 'Electrical Works › PV Module': …" — because with several levels, "the
+    // sub-item weights are wrong" gives the user nothing to act on. It is the same
+    // check the templates and lead screens run, and the server re-runs it.
     for (const p of phases) {
-      const subs = (p.subItems || []).filter(si => si.name && si.name.trim());
-      if (subs.length > 0) {
-        const sum = subs.reduce((s, si) => s + (Number(si.weightPct) || 0), 0);
-        if (Math.abs(sum - 100) > 0.01) {
-          showError(`Sub-item weights under "${p.phaseName}" total ${sum.toFixed(2)}% — they must add up to exactly 100% before saving.`);
-          return;
-        }
-      }
+      const check = validateTree(p.subItems, p.phaseName);
+      if (!check.ok) { showError(check.error); return; }
+      // Dates and periods, per parent, at every level. There was previously NO date
+      // validation at all here — the old inputs' min/max were browser-level only, so
+      // an end-before-start, or an item scheduled outside its own phase, saved silently.
+      const sched = validateSchedule(p.subItems, phaseGrid(p), p.phaseName);
+      if (!sched.ok) { showError(sched.error); return; }
     }
     // Item weights drive physical progress, so they must total 100% before the
     // scope is stored. Blank rows already absorb whatever the typed rows leave,
@@ -1021,6 +1062,15 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
         siteLng: scope.siteLng === '' || scope.siteLng == null ? null : Number(scope.siteLng),
         phases: phases.map((p, i) => ({
           id: p.id, seqNo: i + 1, phaseName: p.phaseName, phaseDescription: p.phaseDescription,
+          // A phase's own span, and how it divides for the items under it.
+          //
+          // These were NEVER SENT before — project_phases.planned_start_date and
+          // planned_end_date have existed and been wired end-to-end on the server the
+          // whole time, but because the client omitted them, saveScope wrote NULL into
+          // both on every single save. A phase could not carry a date at all.
+          plannedStartDate: p.plannedStartDate || null,
+          plannedEndDate: p.plannedEndDate || null,
+          planUnit: p.planUnit || null,
           startWeek: p.startWeek === '' ? null : Number(p.startWeek),
           endWeek: p.endWeek === '' ? null : Number(p.endWeek),
           // Persist the AUTO status (progress drives it; Delayed/On Hold stick).
@@ -1035,16 +1085,16 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
           weightPct: (p.weightPct === '' || p.weightPct == null)
             ? Number(autoSlice.toFixed(4))
             : Number(p.weightPct),
-          // Sub-item weightPct is RELATIVE to the parent (sums to 100 within it).
-          subItems: (p.subItems || []).filter(si => si.name && si.name.trim()).map(si => ({
-            ...si,
-            progressPercent: isSimple
-              ? (Number(si.progressPercent) || 0)
-              : Math.round(leafActual(leafForSub(p, si))),
-            plannedProgressPct: isSimple
-              ? (si.plannedProgressPct === '' || si.plannedProgressPct == null ? null : Number(si.plannedProgressPct))
-              : (si.plannedProgressPct ?? null),
-          })),
+          // The breakdown TREE. Each node's weightPct is RELATIVE to its own parent
+          // (sums to 100 within it) at every level, and each keeps its id so its
+          // progress rows and its budget stay attached across the save.
+          //
+          // A node's stored progress depends on whether it is a leaf: a leaf gets
+          // its own figure (typed in SIMPLE, summed from its weeks in DETAILED),
+          // while a parent gets the roll-up of its children. Writing a parent's own
+          // stale number here is what would let the headline disagree with the
+          // breakdown underneath it.
+          subItems: serialiseNodes(p.subItems, p),
         })).map((pay, i) => {
           // Actual (phaseActualProgress is mode-aware): SIMPLE = typed value / sub-item
           // roll-up; DETAILED = weekly roll-up. Keep decimals in SIMPLE, round in DETAILED.
@@ -1306,8 +1356,19 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
   const hasSubs = (p) => !!(p.subItems && p.subItems.filter(si => si.name != null).length > 0);
   // Sum of a parent's RELATIVE sub-item weights (should be ≤100).
   const subWeightSum = (p) => (p.subItems || []).reduce((s, si) => s + num(si.weightPct), 0);
-  // A single sub-item's ABSOLUTE project weight.
+  // A single sub-item's ABSOLUTE project weight, at DEPTH 1 only. Kept because a
+  // few call sites deal exclusively with a phase's direct children; anything that
+  // walks the tree uses absWeightOf below, which is the same rule applied down a
+  // whole chain of ancestors.
   const absSubWeight = (si) => parentSlice() * (num(si.weightPct) / 100);
+  // The breakdown is now a TREE of any depth, so a node's absolute project weight
+  // is its parent's absolute weight × its own share of that parent — the same rule
+  // as before, applied once per level instead of exactly once. The chain starts at
+  // parentSlice(), so a depth-1 node comes out identical to absSubWeight(si) and
+  // nothing about the existing single-level numbers moves.
+  const absWeightOf = (node, ancestorAbs) => ancestorAbs * (num(node.weightPct) / 100);
+  const kidsOf = (n) => (n.children || []).filter(c => c.name && c.name.trim());
+  const namedSubsOf = (p) => (p.subItems || []).filter(si => si.name && si.name.trim());
   // A parent's effective ABSOLUTE project weight — the weight it will be SAVED
   // with, so the banner, the approve gate and the weighted progress shown here
   // all agree with what the backend rolls up.
@@ -1344,16 +1405,27 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
   // Planned capital = package budget. Actual capital = planned × progress%.
   const projectTotal = num(orderBook.totalAmount);
   const plannedCap = (weightPct) => (num(weightPct) / 100) * projectTotal;
-  // Sub-item capital uses its ABSOLUTE project weight (parentSlice × relative%).
-  const subPlannedCap = (si) => plannedCap(absSubWeight(si));
-  const subActualCap = (si) => subPlannedCap(si) * (num(si.progressPercent) / 100);
+  // Capital sums DOWN THE TREE: a branch's planned capital is its leaves' capital,
+  // not the one level directly beneath it. A single-level sum would have dropped
+  // every level-3 node's money out of the project total entirely.
+  const nodesPlannedCap = (nodes, ancestorAbs) => nodes.reduce((s, n) => {
+    const abs = absWeightOf(n, ancestorAbs);
+    const kids = kidsOf(n);
+    return s + (kids.length ? nodesPlannedCap(kids, abs) : plannedCap(abs));
+  }, 0);
+  const nodesActualCap = (nodes, ancestorAbs) => nodes.reduce((s, n) => {
+    const abs = absWeightOf(n, ancestorAbs);
+    const kids = kidsOf(n);
+    return s + (kids.length
+      ? nodesActualCap(kids, abs)
+      : plannedCap(abs) * (num(n.progressPercent) / 100));
+  }, 0);
   const phasePlannedCap = (p) =>
     hasSubs(p)
-      ? p.subItems.reduce((s, si) => s + subPlannedCap(si), 0)
+      ? nodesPlannedCap(namedSubsOf(p), parentSlice())
       : plannedCap(parentSlice());   // childless parent owns its full slice
   const phaseActualCap = (p) => {
-    if (hasSubs(p))
-      return p.subItems.reduce((s, si) => s + subActualCap(si), 0);
+    if (hasSubs(p)) return nodesActualCap(namedSubsOf(p), parentSlice());
     return plannedCap(parentSlice()) * (num(p.progressPercent) / 100);
   };
   const totalPlannedCap = phases.reduce((s, p) => s + phasePlannedCap(p), 0);
@@ -1368,13 +1440,29 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
   const isSimple = isRooftop && (() => { const kw = parseCapacityKw(scope.systemCapacity); return kw == null || kw < 100; })();
   const isDetailed = !isSimple;
   // Flatten scope into leaf entries: {phaseId, subKey|null, label, start, end, weight}
+  //
+  // A LEAF is a node with no breakdown of its own, wherever it sits in the tree —
+  // that is the level progress is actually recorded at. Walking recursively is what
+  // makes a four-level branch contribute its real leaves instead of its top row.
   const leaves = [];
+  const collectLeaves = (nodes, phase, ancestorAbs, parentLabel) => {
+    nodes.forEach(n => {
+      const abs = absWeightOf(n, ancestorAbs);
+      const kids = kidsOf(n);
+      if (kids.length) { collectLeaves(kids, phase, abs, n.name); return; }
+      leaves.push({
+        // subKey is the node's ID, not its name: two nodes may share a name in
+        // different branches, and their progress must never pool into one row.
+        phaseId: phase.id, subKey: n.id, label: n.name, parent: parentLabel,
+        start: num(n.startWeek) || num(phase.startWeek) || 1,
+        end: num(n.endWeek) || num(n.startWeek) || num(phase.endWeek) || num(phase.startWeek) || nBuckets,
+        weight: abs,
+      });
+    });
+  };
   phases.forEach(p => {
     if (hasSubs(p)) {
-      p.subItems.filter(si => si.name && si.name.trim()).forEach(si => {
-        leaves.push({ phaseId: p.id, subKey: si.name, label: si.name, parent: p.phaseName,
-          start: num(p.startWeek) || 1, end: num(p.endWeek) || num(p.startWeek) || nBuckets, weight: absSubWeight(si) });
-      });
+      collectLeaves(namedSubsOf(p), p, parentSlice(), p.phaseName);
     } else {
       leaves.push({ phaseId: p.id, subKey: null, label: p.phaseName, parent: null,
         start: num(p.startWeek) || 1, end: num(p.endWeek) || num(p.startWeek) || nBuckets, weight: parentSlice() });
@@ -1384,7 +1472,7 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
   // Build the leaf object the week-modal expects, from a schedule row.
   const leafForPhase = (p) => ({ phaseId: p.id, subKey: null, label: p.phaseName, parent: null,
     start: num(p.startWeek) || 1, end: num(p.endWeek) || num(p.startWeek) || nBuckets, weight: parentSlice() });
-  const leafForSub = (p, si) => ({ phaseId: p.id, subKey: si.name, label: si.name, parent: p.phaseName,
+  const leafForSub = (p, si) => ({ phaseId: p.id, subKey: si.id, label: si.name, parent: p.phaseName,
     start: num(si.startWeek) || num(p.startWeek) || 1,
     end: num(si.endWeek) || num(si.startWeek) || num(p.endWeek) || num(p.startWeek) || nBuckets,
     weight: absSubWeight(si) });
@@ -1431,19 +1519,37 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
   const leafPlannedVal = (p, si) => isSimple
     ? (Number((si || p).plannedProgressPct) || 0)
     : leafPlanned(si ? leafForSub(p, si) : leafForPhase(p));
+  //
+  // Roll a group up: a LEAF contributes its own value, a node WITH children the
+  // weighted average of theirs — and since those children may be parents too, the
+  // recursion is what makes a deep branch correct. A mid-level node's own stored
+  // progressPercent is deliberately ignored when it has children: it is never
+  // updated once a breakdown exists, so trusting it would report a finished branch
+  // as 0%. Mirrors ScopeSubItems.rollUp on the server, so the screen and the stored
+  // headline cannot disagree.
+  const rollUpNodes = (nodes, p, readLeaf) => {
+    if (!nodes.length) return null;
+    let acc = 0, wsum = 0, plain = 0;
+    nodes.forEach(n => {
+      const kids = kidsOf(n);
+      const v = kids.length ? (rollUpNodes(kids, p, readLeaf) ?? 0) : readLeaf(p, n);
+      plain += v;
+      const w = num(n.weightPct);
+      if (w > 0) { acc += w * v; wsum += w; }
+    });
+    // No child carries a weight → plain mean, which is what the single-level
+    // version did and keeps a half-configured branch reporting something sane.
+    return wsum > 0 ? acc / wsum : plain / nodes.length;
+  };
   const phaseActualProgress = (p) => {
-    const subs = (p.subItems || []).filter(si => si.name && si.name.trim());
+    const subs = namedSubsOf(p);
     if (subs.length === 0) return leafActualVal(p, null);
-    const wsum = subs.reduce((s, si) => s + num(si.weightPct), 0);
-    if (wsum > 0) return subs.reduce((s, si) => s + num(si.weightPct) * leafActualVal(p, si), 0) / wsum;
-    return subs.reduce((s, si) => s + leafActualVal(p, si), 0) / subs.length;
+    return rollUpNodes(subs, p, leafActualVal);
   };
   const phasePlannedProgress = (p) => {
-    const subs = (p.subItems || []).filter(si => si.name && si.name.trim());
+    const subs = namedSubsOf(p);
     if (subs.length === 0) return leafPlannedVal(p, null);
-    const wsum = subs.reduce((s, si) => s + num(si.weightPct), 0);
-    if (wsum > 0) return subs.reduce((s, si) => s + num(si.weightPct) * leafPlannedVal(p, si), 0) / wsum;
-    return subs.reduce((s, si) => s + leafPlannedVal(p, si), 0) / subs.length;
+    return rollUpNodes(subs, p, leafPlannedVal);
   };
   // Auto status from a phase's actual progress (progress drives status). A manual
   // Delayed / On Hold always wins. In SIMPLE mode (no weekly data) status stays a
@@ -1583,7 +1689,7 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
                 Phase weights total {parentWeightSum.toFixed(1)}% — they must add up to 100% before the scope can be saved. Blank rows share whatever the typed rows leave over, so clearing a weight hands it back to the automatic split.
               </div>
             )}
-            <div className="obd-table-wrap">
+            <div className="obd-table-wrap obd-table-wrap--sticky">
               <table className="obd-table obd-phase-table">
                 <thead>
                   <tr>
@@ -1607,15 +1713,20 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
                       <React.Fragment key={i}>
                         {/* ── Parent phase row ─────────────────────────── */}
                         <tr className={hasSubItems ? 'obd-row-parent' : undefined}>
-                          {/* expand/collapse toggle */}
+                          {/* Opens the breakdown in its own dialog, rather than
+                              expanding it inline under this row — a deep tree
+                              rendered as extra <tr>s here is exactly what made
+                              this table congested. Clickable even with no
+                              sub-items yet, so the modal is also how a phase
+                              gets its FIRST one. */}
                           <td style={{ textAlign: 'center', padding: '0 4px' }}>
                             <button
                               type="button"
-                              title={p.expanded ? 'Collapse sub-items' : 'Expand sub-items'}
-                              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: '#2563eb', padding: 2 }}
-                              onClick={() => updatePhase(i, 'expanded', !p.expanded)}
+                              title={hasSubItems ? 'View / edit breakdown' : 'Add a breakdown'}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#2563eb', display: 'inline-flex' }}
+                              onClick={() => setOpenBreakdown(i)}
                             >
-                              {hasSubItems ? (p.expanded ? '▾' : '▸') : <span className="obd-dash">—</span>}
+                              <Maximize2 size={13} />
                             </button>
                           </td>
                           <td>{i + 1}</td>
@@ -1745,136 +1856,114 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
                           </td>
                         </tr>
 
-                        {/* ── Sub-item rows (visible when expanded) ────── */}
-                        {p.expanded && (p.subItems || []).map((si, si_i) => (
-                          <tr key={`${i}-si-${si_i}`} className="obd-row-sub-alt">
-                            <td colSpan={2} className="obd-cell-faint" style={{ paddingLeft: 28, fontSize: 12 }}>└ {si_i + 1}</td>
-                            <td>
-                              {si.customName ? (
-                                <div className="obd-cat-custom">
-                                  <input className="obd-inp" value={si.name} autoFocus placeholder="Enter sub-item name"
-                                    onChange={e => {
-                                      const updated = [...p.subItems];
-                                      updated[si_i] = { ...si, name: e.target.value };
-                                      updatePhase(i, 'subItems', updated);
-                                    }}
-                                    onBlur={e => registerActivity(e.target.value)} />
-                                  <button type="button" className="obd-cat-back" title="Back to list"
-                                    onClick={() => {
-                                      const updated = [...p.subItems];
-                                      updated[si_i] = { ...si, customName: false, name: '' };
-                                      updatePhase(i, 'subItems', updated);
-                                    }}>↩</button>
-                                </div>
-                              ) : (
-                                <select className="obd-inp"
-                                  value={ACTIVITY_OPTIONS.includes(si.name) ? si.name : (si.name ? '__CURRENT__' : '')}
-                                  onChange={e => {
-                                    const updated = [...p.subItems];
-                                    if (e.target.value === '__OTHER__') updated[si_i] = { ...si, customName: true, name: '' };
-                                    else if (e.target.value === '__CURRENT__') return;
-                                    else updated[si_i] = { ...si, name: e.target.value };
-                                    updatePhase(i, 'subItems', updated);
-                                  }}>
-                                  <option value="">Select sub-item…</option>
-                                  {si.name && !ACTIVITY_OPTIONS.includes(si.name) && <option value="__CURRENT__">{si.name}</option>}
-                                  {ACTIVITY_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-                                  <option value="__OTHER__">Other (type your own)…</option>
-                                </select>
-                              )}
-                            </td>
-                            <td>
-                              <input className="obd-inp" value={si.description || ''} placeholder="Optional"
-                                onChange={e => {
-                                  const updated = [...p.subItems];
-                                  updated[si_i] = { ...si, description: e.target.value };
-                                  updatePhase(i, 'subItems', updated);
-                                }} />
-                            </td>
-                            <td>
-                              <div className="obd-progress-cell">
-                                <input className={`obd-inp obd-inp--xs ${Math.abs(subWeightSum(p) - 100) > 0.5 ? 'obd-weight-banner--warn' : ''}`} type="number" min="0" max="100" step="any"
-                                  value={si.weightPct ?? ''} placeholder="0"
-                                  title="Weight relative to this parent (sub-items sum to 100% within the parent). Auto-filled; edit to override."
-                                  onChange={e => setSubWeight(i, si_i, e.target.value)}
-                                  onBlur={() => snapSubGroup(i, si_i)} />
-                                <span className="obd-progress-cell-pct">%</span>
-                              </div>
-                            </td>
-                            <td>
-                              <input type="date" className="obd-inp obd-inp--sm" value={si.startDate || ''}
-                                min={scope.plannedStartDate || undefined}
-                                max={scope.plannedEndDate || undefined}
-                                onChange={e => {
-                                  const updated = [...p.subItems];
-                                  updated[si_i] = { ...si, startDate: e.target.value };
-                                  updatePhase(i, 'subItems', updated);
-                                }} />
-                            </td>
-                            <td>
-                              <input type="date" className="obd-inp obd-inp--sm" value={si.endDate || ''}
-                                min={si.startDate || scope.plannedStartDate || undefined}
-                                max={scope.plannedEndDate || undefined}
-                                onChange={e => {
-                                  const updated = [...p.subItems];
-                                  updated[si_i] = { ...si, endDate: e.target.value };
-                                  updatePhase(i, 'subItems', updated);
-                                }} />
-                            </td>                            <td>
-                              <select className="obd-inp obd-inp--sm" value={si.status || 'Not Started'}
-                                onChange={e => {
-                                  const st = e.target.value;
-                                  const updated = [...p.subItems];
-                                  updated[si_i] = { ...si, status: st, progressPercent: st === 'Completed' ? 100 : st === 'Not Started' ? 0 : si.progressPercent };
-                                  updatePhase(i, 'subItems', updated);
-                                }}>
-                                {PHASE_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-                              </select>
-                            </td>
-                            {isSimple ? (
-                              <>
-                                <td style={{ textAlign: 'center' }}>
-                                  <input className="obd-inp obd-inp--xs" type="number" min="0" max="100" step="any"
-                                    value={si.plannedProgressPct ?? ''} placeholder="0" title="Planned % for this sub-item"
-                                    onChange={e => { const u = [...p.subItems]; u[si_i] = { ...si, plannedProgressPct: e.target.value }; updatePhase(i, 'subItems', u); }} />
-                                </td>
-                                <td style={{ textAlign: 'center' }}>
-                                  <input className="obd-inp obd-inp--xs" type="number" min="0" max="100" step="any"
-                                    value={si.progressPercent ?? ''} placeholder="0" title="Actual % for this sub-item"
-                                    onChange={e => { const u = [...p.subItems]; u[si_i] = { ...si, progressPercent: e.target.value }; updatePhase(i, 'subItems', u); }} />
-                                </td>
-                              </>
-                            ) : (
-                              <>
-                                <td style={{ textAlign: 'center' }}
-                                  className={leafPlanned(leafForSub(p, si)) > 100.01 ? 'obd-weight-banner--warn' : 'obd-cell-muted'}
-                                  title="Planned % — from this item's weeks">
-                                  {fmtW(leafPlanned(leafForSub(p, si)))}%
-                                </td>
-                                <td style={{ textAlign: 'center' }}
-                                  className={leafActual(leafForSub(p, si)) > leafPlanned(leafForSub(p, si)) + 0.01 ? 'obd-weight-banner--warn' : 'obd-cap-cell--actual'}
-                                  title="Actual % — from this item's weeks">
-                                  {fmtW(leafActual(leafForSub(p, si)))}%
-                                </td>
-                              </>
-                            )}
-                            <td style={{ whiteSpace: 'nowrap' }}>
-                              {isDetailed && si.name && si.name.trim() && (
-                                <button className="obd-btn obd-btn--ghost obd-btn--sm" style={{ marginRight: 4 }}
-                                  title="Set week-wise planned & actual progress"
-                                  onClick={() => setWeekModalLeaf(leafForSub(p, si))}>Weeks</button>
-                              )}
-                              <button className="obd-icon-btn obd-icon-btn--danger" title="Remove sub-item"
-                                onClick={() => removeSubItem(i, si_i)}><Trash2 size={13} /></button>
-                            </td>
-                          </tr>
-                        ))}
                       </React.Fragment>
                     );
                   })}
                 </tbody>
               </table>
             </div>
+
+            {/* ── The breakdown TREE, in its own dialog ───────────────────────
+                Was rendered as extra <tr>s squeezed under the phase row, in the
+                SAME table, at whatever indentation depth it reached — exactly
+                what made this table congested past a shallow breakdown. Now one
+                phase's whole nested tree (any depth) opens in ScopeBreakdownModal
+                instead; ScopeTreeEditor's own chevrons/indentation are unchanged,
+                only where they render moved. One recursive editor, shared with
+                the templates admin page and the lead Technical Scope tab.
+
+                The progress/schedule/status cells are passed in through
+                renderExtra rather than living in the editor, because they are
+                the one thing genuinely specific to a running project — a
+                template and a lead have neither progress nor a calendar. */}
+            {openBreakdown != null && phases[openBreakdown] && (() => {
+              const i = openBreakdown;
+              const p = phases[i];
+              return (
+                <ScopeBreakdownModal
+                  open
+                  parentName={p.phaseName}
+                  subs={p.subItems || []}
+                  onChange={(next) => onSubTreeChange(i, next)}
+                  options={ACTIVITY_OPTIONS}
+                  register={registerActivity}
+                  onClose={() => setOpenBreakdown(null)}
+                  renderExtra={(si, ctx) => {
+                    const kids = kidsOf(si);
+                    // The grid this node is placed ON — its parent's own grid
+                    // when the parent has one, else whatever the parent
+                    // inherited, ending at the project header.
+                    const onGrid = ctx.parent
+                      ? gridUnder(ctx.parent, phaseGrid(p))
+                      : phaseGrid(p);
+                    const write = (k, v) =>
+                      onSubTreeChange(i, setNodeField(p.subItems, si.id, k, v));
+
+                    // Only a LEAF carries progress. A node with children shows
+                    // the roll-up of those children instead, so a mid-level
+                    // row can never be typed into and then silently outranked
+                    // by its own breakdown.
+                    const progress = kids.length ? (
+                      <span className="obd-cell-muted" title="Rolled up from this item&apos;s own breakdown">
+                        {fmtW(rollUpNodes(kids, p, leafPlannedVal))}% / {fmtW(rollUpNodes(kids, p, leafActualVal))}%
+                      </span>
+                    ) : isSimple ? (
+                      <span style={{ display: "inline-flex", gap: 4 }}>
+                        <input className="obd-inp obd-inp--xs" type="number" min="0" max="100" step="any"
+                          value={si.plannedProgressPct ?? ""} placeholder="Plan" title="Planned % for this item"
+                          onChange={(e) => write("plannedProgressPct", e.target.value)} />
+                        <input className="obd-inp obd-inp--xs" type="number" min="0" max="100" step="any"
+                          value={si.progressPercent ?? ""} placeholder="Act" title="Actual % for this item"
+                          onChange={(e) => write("progressPercent", e.target.value)} />
+                      </span>
+                    ) : (
+                      <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                        <span className="obd-cell-muted" title="Planned % / Actual % — from this item&apos;s weeks">
+                          {fmtW(leafPlanned(leafForSub(p, si)))}% / {fmtW(leafActual(leafForSub(p, si)))}%
+                        </span>
+                        {si.name && si.name.trim() && (
+                          <button className="obd-btn obd-btn--ghost obd-btn--sm"
+                            title="Set week-wise planned & actual progress"
+                            onClick={() => setWeekModalLeaf(leafForSub(p, si))}>Weeks</button>
+                        )}
+                      </span>
+                    );
+
+                    return (
+                      <span className="obd-sched-cell">
+                        <NodeScheduleCell node={si} hasKids={kids.length > 0}
+                          grid={onGrid} write={write} cls="obd" />
+                        {/* Restored with the dates: the status select was
+                            dropped in the same refactor. A parent's status is
+                            derived from its children's progress, so only a
+                            leaf is editable here. */}
+                        {kids.length === 0 ? (
+                          <select className="obd-inp obd-inp--sm" value={si.status || "Not Started"}
+                            title="Status of this item"
+                            onChange={(e) => {
+                              const st = e.target.value;
+                              let next = setNodeField(p.subItems, si.id, "status", st);
+                              // Status and progress must agree — picking
+                              // Completed and leaving 40% would show two
+                              // different answers on the same row.
+                              if (st === "Completed") next = setNodeField(next, si.id, "progressPercent", 100);
+                              if (st === "Not Started") next = setNodeField(next, si.id, "progressPercent", 0);
+                              onSubTreeChange(i, next);
+                            }}>
+                            {PHASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        ) : (
+                          <span className="obd-cell-faint" title="Derived from this item's breakdown">
+                            {derivedNodeStatus(si, p)}
+                          </span>
+                        )}
+                        {progress}
+                      </span>
+                    );
+                  }}
+                />
+              );
+            })()}
 
             {/* Save / Approve — placed directly under the table for easy reach */}
             <div className="obd-schedule-footer">
@@ -2141,7 +2230,15 @@ export const CommercialTab = ({ orderBook, authHeaders, showSuccess, showError }
   // childless parents); a parent with children shows the auto-summed total (locked),
   // exactly like the weight rollup. Saved via the surgical /scope/budgets endpoint.
   const bnum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
-  const subBudgetSum = (p) => (p.subItems || []).reduce((s, si) => s + bnum(si.plannedBudget), 0);
+  // Money adds UP THE TREE: only a leaf carries a typed figure, and every parent
+  // above it — at any depth — is the sum of its own children. A single-level sum
+  // would have silently dropped every node below level 1 out of the project total.
+  const budgetLeaves = (nodes) => (nodes || []).flatMap(n =>
+    ((n.children || []).length ? budgetLeaves(n.children) : [n]));
+  const subBudgetSum = (p) => budgetLeaves(p.subItems).reduce((s, si) => s + bnum(si.plannedBudget), 0);
+  const nodeBudget = (n) => ((n.children || []).length
+    ? (n.children || []).reduce((s, c) => s + nodeBudget(c), 0)
+    : bnum(n.plannedBudget));
   const phaseBudget = (p) => (p.subItems && p.subItems.length > 0) ? subBudgetSum(p) : bnum(p.plannedBudget);
   const scopePartTotal = scopeTree.reduce((s, p) => s + phaseBudget(p), 0);
   // Budget-only extras live in the existing flat `cost` list (not the scope tree).
@@ -2150,13 +2247,54 @@ export const CommercialTab = ({ orderBook, authHeaders, showSuccess, showError }
 
   const setLeafBudget = (pi, val) => setScopeTree(prev => prev.map((p, idx) =>
     idx === pi ? { ...p, plannedBudget: val === '' ? '' : Math.max(0, Number(val)) } : p));
-  const setSubBudget = (pi, si, val) => setScopeTree(prev => prev.map((p, idx) => {
+  // Addressed by node ID, not by index: the row may be several levels down, and an
+  // index would be wrong the moment a branch above it was reordered.
+  const setSubBudget = (pi, nodeId, val) => setScopeTree(prev => prev.map((p, idx) => {
     if (idx !== pi) return p;
-    const subItems = p.subItems.map((s, j) => j === si ? { ...s, plannedBudget: val === '' ? '' : Math.max(0, Number(val)) } : s);
-    return { ...p, subItems };
+    const write = (nodes) => (nodes || []).map(n => (n.id === nodeId
+      ? { ...n, plannedBudget: val === '' ? '' : Math.max(0, Number(val)) }
+      : { ...n, children: write(n.children) }));
+    return { ...p, subItems: write(p.subItems) };
   }));
   const toggleExpand = (pi) => setScopeTree(prev => prev.map((p, idx) =>
     idx === pi ? { ...p, expanded: !p.expanded } : p));
+
+  /**
+   * The budget rows for one branch of the tree, recursively.
+   *
+   * A LEAF gets an editable cell; a node WITH children gets its children's total,
+   * read-only — the same "a parent is the sum of its parts" rule the save enforces
+   * server-side, so what the user sees here is what gets stored. Depth is shown by
+   * indenting the name, which keeps every budget figure in one aligned column
+   * however deep the branch goes.
+   */
+  const budgetRows = (nodes, pi, depth) => (nodes || []).flatMap((si) => {
+    const kids = si.children || [];
+    const sBudget = nodeBudget(si);
+    const sPct = totalScopeBudget > 0 ? (sBudget / totalScopeBudget) * 100 : 0;
+    const row = (
+      <tr key={si.id}>
+        <td></td>
+        <td></td>
+        <td style={{ paddingLeft: 16 + depth * 14 }} className="obd-cell-muted">↳ {si.name}</td>
+        <td className="obd-cell-faint">{si.weightPct != null && si.weightPct !== '' ? `${Number(si.weightPct)}%` : '—'}</td>
+        <td>
+          {kids.length ? (
+            <span className="obd-cell-faint" title="Summed from this item's own breakdown — edit the items under it">
+              {fmtMoney(sBudget)}
+            </span>
+          ) : (
+            <input className="obd-inp obd-inp--sm" type="number" min="0" placeholder="0"
+              value={si.plannedBudget ?? ''}
+              onChange={e => setSubBudget(pi, si.id, e.target.value)} />
+          )}
+        </td>
+        <td className="obd-cell-faint">{sPct.toFixed(1)}%</td>
+        <td></td>
+      </tr>
+    );
+    return [row, ...budgetRows(kids, pi, depth + 1)];
+  });
   // Extra budget-only line helpers (operate on the flat `cost` list).
   const addExtra = () => setCost(prev => [...prev, { id: null, itemName: '', amount: '', plannedDate: '', notes: '' }]);
   const setExtra = (i, field, val) => setCost(prev => prev.map((l, idx) => idx === i ? { ...l, [field]: val } : l));
@@ -2172,8 +2310,17 @@ export const CommercialTab = ({ orderBook, authHeaders, showSuccess, showError }
         phaseId: p.id,
         plannedBudget: (p.subItems && p.subItems.length > 0) ? null
           : (p.plannedBudget === '' || p.plannedBudget == null ? null : Number(p.plannedBudget)),
-        subBudgets: (p.subItems || []).map(si => ({
-          name: si.name,
+        // Every LEAF in the tree, at any depth, keyed by its node ID.
+        //
+        // This used to send `{ name, plannedBudget }` for one flat level, and the
+        // server matched on the name with an exact equals. A tree repeats names
+        // across branches, so that would have written one branch's money onto
+        // another's — and it would have missed every node below level 1 entirely.
+        // Only leaves are sent: a parent's figure is the sum of its children,
+        // recomputed server-side, so sending one would be overwritten anyway.
+        subBudgets: budgetLeaves(p.subItems).map(si => ({
+          id: si.id,
+          name: si.name,   // for logs and error messages only; the id is the key
           plannedBudget: si.plannedBudget === '' || si.plannedBudget == null ? null : Number(si.plannedBudget),
         })),
       }));
@@ -2342,25 +2489,15 @@ export const CommercialTab = ({ orderBook, authHeaders, showSuccess, showError }
                           <td>{pctOfTotal.toFixed(1)}%</td>
                           <td></td>
                         </tr>
-                        {hasSub && p.expanded && p.subItems.map((si, si_i) => {
-                          const sBudget = bnum(si.plannedBudget);
-                          const sPct = totalScopeBudget > 0 ? (sBudget / totalScopeBudget) * 100 : 0;
-                          return (
-                            <tr key={si_i}>
-                              <td></td>
-                              <td></td>
-                              <td style={{ paddingLeft: 28 }} className="obd-cell-muted">↳ {si.name}</td>
-                              <td className="obd-cell-faint">{si.weightPct != null && si.weightPct !== '' ? `${Number(si.weightPct)}%` : '—'}</td>
-                              <td>
-                                <input className="obd-inp obd-inp--sm" type="number" min="0" placeholder="0"
-                                  value={si.plannedBudget ?? ''}
-                                  onChange={e => setSubBudget(pi, si_i, e.target.value)} />
-                              </td>
-                              <td className="obd-cell-faint">{sPct.toFixed(1)}%</td>
-                              <td></td>
-                            </tr>
-                          );
-                        })}
+                        {/* The breakdown, to full depth. Rendered recursively so a
+                            level-3 node gets its own budget cell — the flat version
+                            showed only the phase's direct children, which meant money
+                            below that simply had nowhere to be entered.
+
+                            Only a LEAF is typeable: a parent shows the auto-summed
+                            total of its own children, locked, exactly like the weight
+                            roll-up above it. */}
+                        {hasSub && p.expanded && budgetRows(p.subItems, pi, 1)}
                       </React.Fragment>
                     );
                   })}

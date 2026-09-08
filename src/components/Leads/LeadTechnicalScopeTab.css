@@ -80,8 +80,45 @@
 .lts-card-head .lts-btn-ghost + .lts-flow-badge { margin-left: auto; }
 
 /* Table */
-.lts-table-wrap { overflow-x: auto; }
-.lts-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+/* Pinned header, sized by the lead detail shell — not its own guess.
+   .ld-detail-page (Leads-Enquire.css) is ALREADY a fixed-height flex shell whose
+   one scrolling pane is .ld-tab-content: topbar/hero/tabnav are flex:0 chrome,
+   .ld-tab-content is flex:1 1 auto; overflow-y:auto. This wrapper used to fight
+   that with its own independent overflow:auto plus a guessed
+   calc(100vh - 300px) — a second scroll container nested inside the first, capped
+   at a number with no relation to the space actually free, which is why the table
+   looked short with its own scrollbar sitting inside an otherwise mostly-empty
+   pane. No overflow/height rule here now — the table flows at its natural height
+   inside .ld-tab-content, the real (and correctly sized) scrolling ancestor. Only
+   the pinned header below still needs this wrapper. */
+.lts-table-wrap {
+  overflow: visible;
+}
+
+.lts-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+
+/* NB: `>` is load-bearing. The breakdown editor renders its own <table> inside a
+   cell of this one, so a descendant selector would pin every sub-table header too
+   and they would stack up the screen as you scroll. */
+.lts-table > thead > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* Opaque — rows scroll UNDER this. */
+  background: var(--c-fff, #fff);
+}
+
+/* .ld-detail-page's own short-viewport fallback (Leads-Enquire.css) drops
+   .ld-tab-content back to plain document scrolling, at which point this thead's
+   `top: 0` would resolve against the DOCUMENT and sit flush under the fixed
+   navbar — visually hidden behind it. Match the shell's own retreat. */
+@media (max-width: 768px), (max-height: 620px) {
+  .lts-table > thead > tr > th {
+    position: static;
+  }
+}
+
 /* Column heads share the detail view's one label treatment — 11px bold
    uppercase on --ct-374151. Identical in LeadBomTab and LeadBudgetTab. */
 .lts-table thead th {
@@ -94,6 +131,12 @@
 .lts-col-cat { width: 130px; }
 .lts-col-qty { width: 90px; }
 .lts-col-unit { width: 110px; }
+/* Wide enough for two date inputs plus the W/M toggle without wrapping at depth 1. */
+.lts-col-sched { min-width: 300px; }
+/* The muted text NodeScheduleCell uses for a resolved date range or a duration.
+   --ct-* is the text token family; a --c- token here would be a surface colour and
+   would render dark-on-dark in the dark theme. */
+.lts-cell-faint { font-size: 11px; color: var(--ct-9ca3af, #9CA3AF); }
 .lts-col-act { width: 70px; text-align: right; white-space: nowrap; }
 .lts-empty { text-align: center; color: var(--ct-9ca3af, #9CA3AF); padding: 20px 0; font-style: italic; }
 .lts-draft-row { background: var(--c-f8fafb, #F8FAFB); }

@@ -8,20 +8,17 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 .ssi-wrap {
-  border-left: 3px solid var(--c-1b3a6b, #1B3A6B);
-  border-radius: 0 8px 8px 0;
   background: var(--c-fff, #fff);
   padding: 8px 10px;
-  margin: 2px 0 6px 4px;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
+  margin: 2px 0 6px;
 }
-[data-theme="dark"] .ssi-wrap { background: #0f1728; box-shadow: none; }
+[data-theme="dark"] .ssi-wrap { background: #0f1728; }
 
 .ssi-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
 .ssi-right { margin-left: auto; }
 .ssi-head .ssi-right ~ .ssi-btn { margin-left: 0; }
 
-.ssi-hint { font-size: 12px; color: var(--ct-9ca3af, #9CA3AF); font-style: italic; }
+.ssi-hint { font-size: 12px; color: var(--ct-6b7280, #6B7280); font-style: italic; }
 .ssi-bad { color: var(--ct-dc2626, #DC2626); font-weight: 600; font-size: 12px; }
 
 .ssi-btn {
@@ -37,7 +34,7 @@
 /* The expand/collapse chevron, hosted inside the parent row's number cell. */
 .ssi-toggle {
   background: none; border: none; cursor: pointer; padding: 0 2px 0 0; margin-right: 1px;
-  color: var(--ct-9ca3af, #9CA3AF); display: inline-flex; align-items: center; vertical-align: -2px;
+  color: var(--ct-6b7280, #6B7280); display: inline-flex; align-items: center; vertical-align: -2px;
 }
 .ssi-toggle:hover { color: var(--ct-1b3a6b, #1B3A6B); }
 
@@ -49,7 +46,7 @@
 }
 
 .ssi-empty {
-  text-align: center; color: var(--ct-9ca3af, #9CA3AF); font-style: italic;
+  text-align: center; color: var(--ct-6b7280, #6B7280); font-style: italic;
   padding: 10px 0; font-size: 12px;
 }
 
@@ -62,7 +59,7 @@
 .ssi-table tbody td {
   padding: 4px 8px; border-bottom: 1px solid var(--c-f3f4f6, #F3F4F6); vertical-align: middle;
 }
-.ssi-c-no { width: 34px; color: var(--ct-9ca3af, #9CA3AF); font-weight: 600; }
+.ssi-c-no { width: 34px; color: var(--ct-374151, #374151); font-weight: 600; }
 .ssi-c-unit { min-width: 110px; }
 .ssi-c-weight { width: 96px; }
 .ssi-c-act { width: 40px; text-align: right; }

@@ -1,4 +1,21 @@
 // ─────────────────────────────────────────────────────────────────────────────
+//  SUPERSEDED (2026-09-07) by ScopeTreeEditor.js — nothing imports this module's
+//  JS any more.
+//
+//  It could only ever render ONE flat level of sub-items. A scope breakdown is
+//  now a tree of arbitrary depth, so the templates admin page, the lead Technical
+//  Scope tab and the project Scope/Plan tab all moved to the single recursive
+//  ScopeTreeEditor instead of growing three copies of the recursion.
+//
+//  The FILE is kept only because ScopeSubItemsEditor.css is still the base
+//  stylesheet ScopeTreeEditor loads (it adds ScopeTreeEditor.css on top). Delete
+//  the component below only together with that dependency.
+//
+//  Note the contract note further down is now HISTORICAL: a node's identity is
+//  its `id`, not its name, so renaming one no longer detaches its progress or
+//  budget. See utils/scopeTree.js.
+//
+//  ─────────────────────────────────────────────────────────────────────────────
 //  ScopeSubItemsEditor — the second level under one scope line.
 //
 //  The same breakdown now lives on a template line, a lead's scope item and a

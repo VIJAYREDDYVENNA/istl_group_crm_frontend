@@ -111,6 +111,14 @@ const ProjectDetailPage = () => {
   // Scope header only — the planned schedule window that drives the timeline.
   const [scope, setScope] = useState(null);
 
+  // .obd-tab-body is one persistent scroll container shared by every tab (the
+  // overview card lives inside it too, so it can scroll away). Switching tabs
+  // swaps its children but not the element itself, so a scroll position left
+  // over from the previous tab would carry over and clip the new tab's header
+  // card at the top. Snap back to the top on every tab change.
+  const tabBodyRef = useRef(null);
+  useEffect(() => { tabBodyRef.current?.scrollTo(0, 0); }, [activeTab]);
+
   const authHeaders = useMemo(
     () => ({ 'User-Id': String(user?.id || ''), 'User-Role': String(user?.role || '') }),
     [user]
@@ -236,68 +244,6 @@ const ProjectDetailPage = () => {
         <ArrowLeft size={16} /> Back to Projects
       </button>
 
-      {/* Header card */}
-      <div className="obd-header-card">
-        <div className="obd-header-main">
-          <h1 className="obd-title">{project.projectName || project.projectUniqueId}</h1>
-          <div className="obd-subline" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span
-              className="pl-status-badge"
-              style={{ background: getStatusColor(project.status) + '22', color: getStatusColor(project.status) }}
-            >
-              {statusLabel(project.status)}
-            </span>
-            {project.groupName && <span className={groupPillClass(project.groupName)}>{project.groupName}</span>}
-            {project.customerName && <span className="obd-chip">{project.customerName}</span>}
-          </div>
-        </div>
-
-        {/* "View Order Book →" — subtle secondary link, top-right */}
-        {linkedOrderBookId && (
-          <button
-            className="pd-secondary-link"
-            onClick={() => navigate('/order-book')}
-          >
-            View Order Book →
-          </button>
-        )}
-
-        {/* Metric strip */}
-        <div className="pd-metric-strip" style={{ flexBasis: '100%' }}>
-          <div className="pd-metric">
-            <label><Hash size={12} strokeWidth={2.2} aria-hidden="true" />Project ID</label>
-            <span className="pd-metric-mono">{project.projectUniqueId}</span>
-          </div>
-          <div className="pd-metric">
-            <label><IndianRupee size={12} strokeWidth={2.2} aria-hidden="true" />Budget</label>
-            <span>{fmtMoney(project.budget)}</span>
-          </div>
-          <div className="pd-metric" title={TIMELINE_HINT[timeline.source]}>
-            <label><CalendarRange size={12} strokeWidth={2.2} aria-hidden="true" />Timeline</label>
-            <span>
-              {fmtDate(timeline.start)} → {fmtDate(timeline.end)}
-              {timeline.source === 'SCOPE' && <span className="pd-metric-tag">Scheduled</span>}
-            </span>
-          </div>
-          <div className="pd-metric pd-metric--progress">
-            <label><Gauge size={12} strokeWidth={2.2} aria-hidden="true" />Progress</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                title={pct == null ? 'No technical scope defined for this project' : undefined}>
-                <span style={{ fontSize: 10, color: '#94a3b8', width: 24 }}>Tech</span>
-                <div className="pl-progress" style={{ flex: 1, minWidth: 90 }}><div className="pl-progress-fill" style={{ width: `${pct ?? 0}%`, background: progressColor(project.status) }} /></div>
-                <span className="pl-progress-pct">{pct == null ? NO_TECH_PROGRESS : `${pct}%`}</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 10, color: '#94a3b8', width: 24 }}>Fin</span>
-                <div className="pl-progress" style={{ flex: 1, minWidth: 90 }}><div className="pl-progress-fill" style={{ width: `${finPct}%`, background: '#8b5cf6' }} /></div>
-                <span className="pl-progress-pct">{finPct}%</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* Tab bar — one row of chevrons that nest into each other, so the selected
           tab reads as an arrow. Same pattern as the lead detail view (.ld-pipe),
           rebuilt under pd-* in Projects.css rather than imported from the leads
@@ -323,7 +269,71 @@ const ProjectDetailPage = () => {
         </div>
       </div>
 
-      <div className="obd-tab-body">
+      <div className="obd-tab-body" ref={tabBodyRef}>
+        {/* Header card lives inside the scroll pane (not pinned next to the tab
+            bar) so it scrolls away as you go — the tab bar stays docked right
+            under the navbar and the content below gets the freed-up height. */}
+        <div className="obd-header-card">
+          <div className="obd-header-main">
+            <h1 className="obd-title">{project.projectName || project.projectUniqueId}</h1>
+            <div className="obd-subline" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span
+                className="pl-status-badge"
+                style={{ background: getStatusColor(project.status) + '22', color: getStatusColor(project.status) }}
+              >
+                {statusLabel(project.status)}
+              </span>
+              {project.groupName && <span className={groupPillClass(project.groupName)}>{project.groupName}</span>}
+              {project.customerName && <span className="obd-chip">{project.customerName}</span>}
+            </div>
+          </div>
+
+          {/* "View Order Book →" — subtle secondary link, top-right */}
+          {linkedOrderBookId && (
+            <button
+              className="pd-secondary-link"
+              onClick={() => navigate('/order-book')}
+            >
+              View Order Book →
+            </button>
+          )}
+
+          {/* Metric strip */}
+          <div className="pd-metric-strip" style={{ flexBasis: '100%' }}>
+            <div className="pd-metric">
+              <label><Hash size={12} strokeWidth={2.2} aria-hidden="true" />Project ID</label>
+              <span className="pd-metric-mono">{project.projectUniqueId}</span>
+            </div>
+            <div className="pd-metric">
+              <label><IndianRupee size={12} strokeWidth={2.2} aria-hidden="true" />Budget</label>
+              <span>{fmtMoney(project.budget)}</span>
+            </div>
+            <div className="pd-metric" title={TIMELINE_HINT[timeline.source]}>
+              <label><CalendarRange size={12} strokeWidth={2.2} aria-hidden="true" />Timeline</label>
+              <span>
+                {fmtDate(timeline.start)} → {fmtDate(timeline.end)}
+                {timeline.source === 'SCOPE' && <span className="pd-metric-tag">Scheduled</span>}
+              </span>
+            </div>
+            <div className="pd-metric pd-metric--progress">
+              <label><Gauge size={12} strokeWidth={2.2} aria-hidden="true" />Progress</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                  title={pct == null ? 'No technical scope defined for this project' : undefined}>
+                  <span style={{ fontSize: 10, color: '#94a3b8', width: 24 }}>Tech</span>
+                  <div className="pl-progress" style={{ flex: 1, minWidth: 90 }}><div className="pl-progress-fill" style={{ width: `${pct ?? 0}%`, background: progressColor(project.status) }} /></div>
+                  <span className="pl-progress-pct">{pct == null ? NO_TECH_PROGRESS : `${pct}%`}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 10, color: '#94a3b8', width: 24 }}>Fin</span>
+                  <div className="pl-progress" style={{ flex: 1, minWidth: 90 }}><div className="pl-progress-fill" style={{ width: `${finPct}%`, background: '#8b5cf6' }} /></div>
+                  <span className="pl-progress-pct">{finPct}%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {activeTab === 'overview'   && (
           <ProjectOverviewTab
             project={project}

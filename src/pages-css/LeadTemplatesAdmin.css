@@ -111,9 +111,40 @@ select.lta-inp { cursor: pointer; }
 .lta-icon-del:hover { background: var(--c-fef2f2, #FEF2F2); }
 
 /* Tables */
-.lta-table-wrap { overflow-x: auto; }
-.lta-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+
+/* THE DATA TABLE IS ITS OWN SCROLL CONTAINER, not the page.
+   A template with forty activities used to push the whole page down, so the tab
+   bar, the toolbar and the running weight total all scrolled off the top — and
+   the total is precisely what the user is watching while they type weights.
+   Capping the table area keeps the tabs, the toolbar and the footer in place and
+   scrolls only the rows underneath them.
+
+   Capped in vh rather than by making the page a fixed-height flex column: this
+   card sits inside the app shell, whose header height this stylesheet does not
+   own, so a hard 100vh chain would either overflow or leave a gap depending on
+   the shell. A max-height only ever removes page scroll, never adds it, and the
+   min-height keeps it usable on a short window. */
+.lta-table-wrap {
+  overflow: auto;
+  max-height: calc(100vh - 320px);
+  min-height: 220px;
+  overscroll-behavior: contain;   /* don't chain to the page at the ends */
+}
+
+.lta-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .lta-table--bom { min-width: 1100px; }
+
+/* NB: `>` on thead is load-bearing. The nested breakdown editor renders its own
+   <table> inside a cell of this one, so a descendant selector here would pin
+   every sub-table's header too and they would stack up the screen as you scroll. */
+.lta-table > thead > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* Opaque: rows scroll UNDER this, so a transparent header would show them through. */
+  background: var(--c-fff, #fff);
+}
+
 .lta-table thead th {
   text-align: left; font-size: 10.5px; font-weight: 700; color: var(--ct-9ca3af, #9CA3AF);
   text-transform: uppercase; letter-spacing: .03em; padding: 6px 8px; white-space: nowrap;
