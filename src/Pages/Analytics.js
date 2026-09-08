@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Maximize2, X } from 'lucide-react';
+import { Maximize2, X, Download } from 'lucide-react';
 import DateRangeFilter from '../components/DateRangeFilter';
 import FilterSelect from '../components/Dropdowns/FilterSelect';
 import '../components_css/Dropdowns/GroupProjectFilter.css';
 import '../pages-css/Analytics.css';
+import { downloadAnalyticsReport } from './analyticsReportPdf';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL;
 
 const RANGES = [
+  { k: 'this_week',      l: 'This Week' },
+  { k: 'last_week',      l: 'Last Week' },
   { k: 'this_month',     l: 'This Month' },
   { k: 'last_month',     l: 'Last Month' },
   { k: 'last_3_months',  l: 'Last 3 Months' },
@@ -27,6 +30,14 @@ const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
 // navigating away and back resets to the default range.
 const FILTER_KEY = 'anl_filter';
 const readFilter = () => { try { return JSON.parse(sessionStorage.getItem(FILTER_KEY)) || {}; } catch { return {}; } };
+
+// Backend-reported data scope. The badge exists so a manager whose KPIs shrank
+// after team scoping went in can see WHY, instead of filing it as a bug.
+const SCOPE_BADGE = {
+  all:  { label: 'All company', title: 'You can see data for every user.' },
+  team: { label: 'My team',     title: 'Data for you and everyone reporting to you.' },
+  self: { label: 'My leads',    title: 'Only leads you are assigned to or have closed.' },
+};
 
 const SERIES = ['#5b8cff', '#27d3a2', '#ffb545', '#ff6b8a', '#a880ff', '#46c8ff', '#8de36a', '#ff8f5c'];
 const DOT = '\u00b7';
@@ -94,6 +105,7 @@ const Analytics = () => {
   const [drillMonth, setDrillMonth] = useState(null); // "2026-09"
   const [drillData, setDrillData] = useState(null);   // kept apart so `data` (the year) survives
   const [drillLoading, setDrillLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     sessionStorage.setItem(FILTER_KEY, JSON.stringify({ range, customFrom, customTo }));
@@ -165,6 +177,38 @@ const Analytics = () => {
   // Leaving the drill whenever the underlying filter changes keeps the two in sync.
   useEffect(() => { setDrillMonth(null); setDrillData(null); }, [range, customFrom, customTo]);
 
+  // ── PDF report ─────────────────────────────────────────────────────────────
+  // Built from the SAME payload the page is rendering, plus a fresh pull of team
+  // performance (that endpoint is not date-bounded, so it is not part of `data`).
+  // Both are already scoped by the backend to the viewer's reporting subtree, so
+  // the report can never contain data the viewer cannot see on screen.
+  const downloadReport = useCallback(async () => {
+    if (!data || downloading) return;
+    setDownloading(true);
+    try {
+      let team = null;
+      try {
+        // Same range as the page, so every figure in the report — including the
+        // per-person breakdown — comes from the selected window and nothing else.
+        let url = `${API_BASE_URL}/analytics/team-performance?range=${range}`;
+        if (range === 'custom') url += `&from=${customFrom}&to=${customTo}`;
+        const res = await fetch(url, { credentials: 'include' });
+        const json = await res.json();
+        if (json.success) team = json.data;
+      } catch { /* the section degrades to "no members visible", the rest still prints */ }
+      await downloadAnalyticsReport({
+        data,
+        team,
+        user,
+        rangeLabel: (RANGES.find(r => r.k === range) || {}).l || 'Custom range',
+      });
+    } catch {
+      setError('Could not build the PDF report.');
+    } finally {
+      setDownloading(false);
+    }
+  }, [data, downloading, range, customFrom, customTo, user]);
+
   const openModal = (title, render, selfZoom) => setModalChart({ title, render, selfZoom });
 
   // Range dropdown: presets fetch immediately. "Custom range…" switches to custom
@@ -180,7 +224,14 @@ const Analytics = () => {
       <div className="anl-bg" aria-hidden="true" />
       <header className="anl-head">
         <div>
-          <h1 className="anl-title">Lead Analytics</h1>
+          <h1 className="anl-title">
+            Lead Analytics
+            {data && SCOPE_BADGE[data.scope] && (
+              <span className={`anl-scope anl-scope--${data.scope}`} title={SCOPE_BADGE[data.scope].title}>
+                {SCOPE_BADGE[data.scope].label}
+              </span>
+            )}
+          </h1>
           <p className="anl-sub">{data ? `${data.from} to ${data.to}` : 'Performance overview'}</p>
         </div>
         <div className="anl-filters">
@@ -201,6 +252,16 @@ const Analytics = () => {
               onClear={clearCustomRange}
             />
           )}
+          <button
+            type="button"
+            className="anl-download"
+            onClick={downloadReport}
+            disabled={!data || loading || downloading}
+            title="Download this view as a PDF report"
+          >
+            <Download size={14} />
+            {downloading ? 'Preparing...' : 'Download PDF'}
+          </button>
         </div>
       </header>
 

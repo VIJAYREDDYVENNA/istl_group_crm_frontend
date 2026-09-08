@@ -232,3 +232,87 @@ select.lta-inp { cursor: pointer; }
 [data-theme="dark"] .lta-weight-total--ok  { background: #102A22; color: #4ADE80; border-color: #1D4D3C; }
 [data-theme="dark"] .lta-weight-total--err { background: #2A1212; color: #F87171; border-color: #4D1D1D; }
 [data-theme="dark"] .lta-inp--w.lta-w-pinned { background: #16233a; border-color: #3b6bb5; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Scope sub-items — the second level under a scope line.
+
+   The nested table is deliberately not a second visual language: it reuses
+   .lta-table and only sets it apart with an indent, a lighter ground and the
+   accent rail on the left, so the eye reads "inside that activity" rather than
+   "a different kind of table".
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Two buttons live in a parent row's action cell (add sub-item + delete). */
+.lta-c-act { white-space: nowrap; }
+.lta-icon-add {
+  background: none; border: none; cursor: pointer; color: var(--ct-1b3a6b, #1B3A6B);
+  padding: 4px 5px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
+}
+.lta-icon-add:hover { background: var(--c-f0f4fb, #F0F4FB); }
+
+/* The expand/collapse chevron sits inside the row-number cell. */
+.lta-sub-toggle {
+  background: none; border: none; cursor: pointer; padding: 0 2px 0 0; margin-right: 1px;
+  color: var(--ct-9ca3af, #9CA3AF); display: inline-flex; align-items: center; vertical-align: -2px;
+}
+.lta-sub-toggle:hover { color: var(--ct-1b3a6b, #1B3A6B); }
+
+/* An activity that HAS a breakdown reads as a heading for the rows under it. */
+.lta-row--parent > td { background: var(--c-fafbfd, #FAFBFD); }
+[data-theme="dark"] .lta-row--parent > td { background: #141c2b; }
+
+/* Collapsed: one line naming what is inside, so a closed breakdown is findable. */
+.lta-sub-summary > td { padding-top: 0; border-bottom: 1px solid var(--c-f3f4f6, #F3F4F6); font-size: 12px; }
+.lta-linkish {
+  background: none; border: none; padding: 0; cursor: pointer; font-size: 12px; font-weight: 700;
+  color: var(--ct-1b3a6b, #1B3A6B); text-decoration: underline; text-underline-offset: 2px;
+}
+.lta-sub-bad { color: var(--ct-dc2626, #DC2626); font-weight: 600; }
+
+/* Expanded: the breakdown panel. */
+.lta-sub-block > td { padding: 0 8px 10px 8px; background: var(--c-fafbfd, #FAFBFD); }
+[data-theme="dark"] .lta-sub-block > td { background: #141c2b; }
+.lta-sub-wrap {
+  border-left: 3px solid var(--c-1b3a6b, #1B3A6B); border-radius: 0 8px 8px 0;
+  background: var(--c-fff, #fff); padding: 8px 10px; margin-left: 4px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
+}
+[data-theme="dark"] .lta-sub-wrap { background: #0f1728; box-shadow: none; }
+.lta-sub-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.lta-sub-head .lta-act-right { margin-left: auto; }
+.lta-sub-head .lta-act-right ~ .lta-btn-ghost { margin-left: 0; }
+.lta-sub-head .lta-btn-ghost { padding: 4px 9px; font-size: 11.5px; }
+.lta-sub-empty { padding: 10px 0; font-size: 12px; }
+.lta-table--sub { font-size: 12px; }
+.lta-table--sub thead th { font-size: 10px; padding: 4px 8px; }
+.lta-table--sub tbody td { padding: 4px 8px; }
+/* A sub-total is a smaller claim than the template total — same colours, less weight. */
+.lta-weight-total--sub { margin-top: 6px; font-size: 12px; padding: 4px 10px; }
+
+/* ── Excel import preview ── */
+.lta-modal-back {
+  position: fixed; inset: 0; z-index: 1200; background: rgba(15, 23, 42, .45);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.lta-modal {
+  background: var(--c-fff, #fff); border-radius: 12px; width: min(920px, 100%);
+  max-height: 86vh; display: flex; flex-direction: column;
+  box-shadow: 0 20px 45px rgba(16, 24, 40, .25);
+}
+[data-theme="dark"] .lta-modal { background: #0f1728; }
+.lta-modal-head { padding: 14px 18px 10px; border-bottom: 1px solid var(--c-e5e7eb, #E5E7EB); }
+.lta-modal-head h3 { margin: 0 0 4px; font-size: 15px; font-weight: 700; color: var(--ct-111827, #111827); }
+.lta-modal-head .lta-hint { font-style: normal; }
+/* The preview list is the part that can be long, so it is the part that scrolls. */
+.lta-modal-body { overflow: auto; padding: 8px 18px; flex: 1 1 auto; }
+.lta-modal-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 18px; border-top: 1px solid var(--c-e5e7eb, #E5E7EB);
+}
+.lta-import-errs {
+  margin: 10px 18px 0; padding: 8px 12px; border-radius: 8px; font-size: 12px;
+  background: var(--c-fef2f2, #FEF2F2); color: #B91C1C; border: 1px solid #FECACA;
+}
+[data-theme="dark"] .lta-import-errs { background: #2A1212; color: #F87171; border-color: #4D1D1D; }
+.lta-import-errs ul { margin: 4px 0 0; padding-left: 18px; }
+.lta-preview-sub { padding-left: 18px; color: var(--ct-6b7280, #6B7280); }

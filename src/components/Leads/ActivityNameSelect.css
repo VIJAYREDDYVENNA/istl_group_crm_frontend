@@ -1,0 +1,16 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   ActivityNameSelect — the "type your own" escape hatch.
+
+   Lives with the component rather than in a host page's stylesheet: the picker is
+   used on the templates admin page, the lead Technical Scope tab and inside
+   ScopeSubItemsEditor, and each of those loads a different CSS file. The select
+   itself is deliberately unstyled here — it takes the `className` the host passes,
+   so it inherits that page's input styling.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.ans-custom { display: flex; align-items: center; gap: 4px; }
+.ans-back {
+  background: none; border: none; cursor: pointer; color: var(--ct-6b7280, #6B7280);
+  font-size: 13px; padding: 2px 4px; border-radius: 6px; line-height: 1;
+}
+.ans-back:hover { background: var(--c-f3f4f6, #F3F4F6); color: var(--ct-1b3a6b, #1B3A6B); }

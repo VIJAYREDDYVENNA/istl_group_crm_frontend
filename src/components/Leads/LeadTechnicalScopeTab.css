@@ -151,3 +151,28 @@ select.lts-inp { cursor: pointer; }
   background: var(--c-fffbeb, #FFFBEB); border: 1px solid var(--c-fde68a, #FDE68A);
   border-radius: 8px; padding: 8px 12px;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Sub-item breakdown rows.
+
+   The breakdown itself is ScopeSubItemsEditor (its own `ssi-*` namespace); these
+   rules only cover how its host row sits in this table.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Two buttons now live in a row's action cell (add sub-item + remove row); the
+   .lts-col-act width above already accommodates them. */
+.lts-icon-add {
+  background: none; border: none; cursor: pointer; color: var(--ct-1b3a6b, #1B3A6B);
+  padding: 4px 5px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
+}
+.lts-icon-add:hover { background: var(--c-f0f4fb, #F0F4FB); }
+
+/* An activity that HAS a breakdown reads as a heading for the rows under it. */
+.lts-row--parent > td { background: var(--c-fafbfd, #FAFBFD); }
+[data-theme="dark"] .lts-row--parent > td { background: #141c2b; }
+
+/* The row that carries the summary or the editor: no cell chrome of its own, so
+   the editor's own left rail is what marks the nesting. */
+.lts-row--sub > td { background: var(--c-fafbfd, #FAFBFD); padding-top: 0; border-bottom: none; }
+.lts-row--sub > td:first-child { width: 40px; }
+[data-theme="dark"] .lts-row--sub > td { background: #141c2b; }

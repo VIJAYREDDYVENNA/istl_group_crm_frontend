@@ -7,7 +7,9 @@
 //  is add / edit / delete. Reached at /officeuse/lead-admin (OFFICE_USE gated).
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Save, Trash2, RefreshCw, Download, Upload } from "lucide-react";
+import {
+  Plus, Save, Trash2, RefreshCw, Download, Upload, ChevronRight, ChevronDown, CornerDownRight,
+} from "lucide-react";
 import api from "../services/leadsapi.js";
 import { downloadStyledTemplate, readSheetRows, cell } from "../components/Leads/bomExcel.js";
 import useToast from "../hooks/useToast";
@@ -17,6 +19,8 @@ import useConfirmationModal from "../components/HandleConfirmationModal.js";
 import UnitSelectCell from "../components/Dropdowns/UnitSelectCell.js";
 import BomItemAutocomplete from "../components/Leads/BomItemAutocomplete.js";
 import TemplateLineVariantsModal from "../components/Leads/TemplateLineVariantsModal.js";
+import ActivityNameSelect, { useActivityNames } from "../components/Leads/ActivityNameSelect.js";
+import { downloadScopeTemplate, exportScope, parseScopeWorkbook } from "../components/Leads/scopeExcel.js";
 import { BASIS_OPTIONS, SITE_VISIT_FIELDS } from "../constants/scopeActivities.js";
 import {
   distributeWeights, resetWeights, setWeightAt, validateWeights, weightSum, fmtWeight,
@@ -69,7 +73,16 @@ const templateAmount = (r) => {
 const blankScope = () => ({
   id: null, activity: "", category: "", specification: "", unit: "kW", notes: "",
   weightPct: "", weightManual: false,
+  // Second-level breakdown. Empty = this activity is not broken down, which is
+  // the normal case; sub-items are opt-in per line.
+  subItems: [],
 });
+
+// A sub-item carries only what a TEMPLATE can know. The execution fields a
+// project phase's sub-item also has (status, progress, dates) are deliberately
+// absent: a template describes work, not a run of it, and inventing "Not
+// Started" here would put a fake progress record in every generated project.
+const blankSubItem = () => ({ name: "", description: "", unit: "", weightPct: "", weightManual: false });
 const blankBom = (scopeActivity = "") => ({
   _key: `n${Math.random().toString(36).slice(2)}`, // stable local key for grouping
   id: null, scopeActivity, category: "", itemName: "", make: "", specification: "",
@@ -167,6 +180,8 @@ export default function LeadTemplatesAdmin() {
   const [selectedId, setSelectedId] = useState(null);
   const [detail, setDetail] = useState(null); // {id, projectType, name, description, isActive}
   const [detailTab, setDetailTab] = useState("scope"); // template | scope | bom
+  // One fetch for the whole page; both levels of the scope table pick from it.
+  const { options: activityOptions, register: registerActivity } = useActivityNames();
   const [scopeLines, setScopeLines] = useState([]);
   const [bomLines, setBomLines] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -217,6 +232,15 @@ export default function LeadTemplatesAdmin() {
         specification: s.specification || "", unit: s.unit || "", notes: s.notes || "",
         weightPct: s.weightPct != null ? Number(s.weightPct) : "",
         weightManual: s.weightManual === true,
+        // Balanced on open the same way the parents are, so a breakdown saved
+        // before this editor existed (the column was dormant storage) still
+        // shows a sensible 100%.
+        subItems: distributeWeights((s.subItems || []).map(si => ({
+          ...blankSubItem(),
+          name: si.name || "", description: si.description || "", unit: si.unit || "",
+          weightPct: si.weightPct != null ? Number(si.weightPct) : "",
+          weightManual: si.weightManual === true,
+        }))),
       }))));
       setBomLines((t.bomItems || []).map(b => ({
         ...blankBom(b.scopeActivity || ""),
@@ -288,6 +312,79 @@ export default function LeadTemplatesAdmin() {
   // a wrong total would otherwise be unrecoverable from the screen.
   const resetScopeWeights = () => setScopeLines(p => resetWeights(p));
 
+  // ── Sub-items: the second level under a scope line ──────────────────────────
+  // A breakdown is its own weight group summing to 100% of ITS PARENT, using the
+  // same helpers as the parents (utils/scopeWeights) rather than a second set of
+  // rules — so pinning, rebalancing and the rounding tolerance behave identically
+  // at both levels, and the server can enforce one model.
+  // Which rows have their breakdown open. UI-only, keyed by row index — the list
+  // is only reordered by add/remove, which re-renders the whole table anyway.
+  const [expanded, setExpanded] = useState({});
+  const toggleExpanded = (i) => setExpanded(e => ({ ...e, [i]: !e[i] }));
+
+  const updSubs = (i, next) =>
+    setScopeLines(p => p.map((r, idx) => (idx === i ? { ...r, subItems: next } : r)));
+  const subsOf = (i) => scopeLines[i].subItems || [];
+
+  const addSubItem = (i) => {
+    updSubs(i, distributeWeights([...subsOf(i), blankSubItem()]));
+    setExpanded(e => ({ ...e, [i]: true }));
+  };
+  const rmSubItem = (i, j) =>
+    updSubs(i, distributeWeights(subsOf(i).filter((_, idx) => idx !== j)));
+  const updSubItem = (i, j, k, v) =>
+    updSubs(i, subsOf(i).map((si, idx) => (idx === j ? { ...si, [k]: v } : si)));
+  const setSubWeight = (i, j, raw) => updSubs(i, setWeightAt(subsOf(i), j, raw));
+  const resetSubWeights = (i) => updSubs(i, resetWeights(subsOf(i)));
+
+  const namedSubs = (r) => (r.subItems || []).filter(si => (si.name || "").trim());
+  const subWeightsOk = (r) => {
+    const subs = namedSubs(r);
+    return subs.length === 0 || validateWeights(subs, si => si.name).ok;
+  };
+
+  // ── Scope Excel: blank template / export / import ───────────────────────────
+  // Import REPLACES the whole list rather than appending, because a scope is a
+  // single ordered document — appending a re-imported file would silently double
+  // every activity. Nothing is written until "Save scope lines", so the preview
+  // is genuinely reversible: navigating away discards it.
+  const scopeFileRef = useRef(null);
+  const [scopePreview, setScopePreview] = useState(null); // { lines, errors }
+
+  const onScopeFilePicked = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const { lines, errors } = await parseScopeWorkbook(file, blankScope);
+      if (!lines.length) {
+        showError(errors.length
+          ? `Nothing could be imported. ${errors[0]}`
+          : "The file has no scope rows. Use the Template button for the expected columns.");
+        return;
+      }
+      setScopePreview({ lines, errors });
+    } catch {
+      showError("Could not read the file. Use the template format (.xlsx, .xls or .csv).");
+    }
+  };
+
+  const applyScopeImport = () => {
+    if (!scopePreview) return;
+    // Balance both levels on the way in, so a file with no weights at all lands
+    // on a valid 100% instead of showing the user an error they did not cause.
+    const lines = distributeWeights(scopePreview.lines).map(r => ({
+      ...r, subItems: distributeWeights(r.subItems || []),
+    }));
+    setScopeLines(lines);
+    setExpanded({});
+    const subCount = lines.reduce((n, r) => n + (r.subItems || []).length, 0);
+    setScopePreview(null);
+    showSuccess(`Imported ${lines.length} activit${lines.length === 1 ? "y" : "ies"}`
+      + `${subCount ? ` and ${subCount} sub-item${subCount === 1 ? "" : "s"}` : ""}. `
+      + "Review, then Save scope lines.");
+  };
+
   const scopeWeightTotal = weightSum(scopeLines);
   const scopeWeightsOk = scopeLines.length === 0
     || validateWeights(scopeLines, r => r.activity).ok;
@@ -298,6 +395,17 @@ export default function LeadTemplatesAdmin() {
     // drift that retyping the displayed values causes. Re-checked server-side.
     const check = validateWeights(scopeLines, r => r.activity.trim());
     if (!check.ok) { showError(check.error); return; }
+    // Each breakdown is its own 100%, checked per parent so the message can name
+    // the activity to go and fix rather than just "the sub-items".
+    for (const r of scopeLines) {
+      const subs = (r.subItems || []).filter(si => (si.name || "").trim());
+      if (!subs.length) continue;
+      const sub = validateWeights(subs, si => si.name.trim());
+      if (!sub.ok) {
+        showError(`Under "${r.activity.trim()}": ${sub.error.replace(/^Scope weights/, "Sub-item weights")}`);
+        return;
+      }
+    }
     setSavingScope(true);
     try {
       await api.put(`/admin/lead-templates/${detail.id}/scope-items`, {
@@ -308,6 +416,17 @@ export default function LeadTemplatesAdmin() {
           // Full precision, not the two-decimal display value.
           weightPct: r.weightPct === "" || r.weightPct == null ? null : Number(r.weightPct),
           weightManual: r.weightManual === true,
+          // Only named sub-items travel: a half-typed row the user left behind is
+          // not part of the standard, and the server rejects a nameless one.
+          subItems: (r.subItems || [])
+            .filter(si => (si.name || "").trim())
+            .map(si => ({
+              name: si.name.trim(),
+              description: si.description || null,
+              unit: si.unit || null,
+              weightPct: si.weightPct === "" || si.weightPct == null ? null : Number(si.weightPct),
+              weightManual: si.weightManual === true,
+            })),
         })),
       });
       await openTemplate(detail.id);
@@ -500,6 +619,73 @@ export default function LeadTemplatesAdmin() {
         );
       })()}
 
+      {/* Import preview. A large scope is exactly the case where a silent import
+          is dangerous — the user cannot eyeball 200 rows in a toast — so what was
+          understood is shown BEFORE it replaces anything, with the rows that could
+          not be read listed by their own row number. */}
+      {scopePreview && (() => {
+        const { lines, errors } = scopePreview;
+        const subCount = lines.reduce((n, r) => n + (r.subItems || []).length, 0);
+        return (
+          <div className="lta-modal-back" onClick={() => setScopePreview(null)}>
+            <div className="lta-modal" onClick={e => e.stopPropagation()}>
+              <div className="lta-modal-head">
+                <h3>Import scope lines</h3>
+                <p className="lta-hint">
+                  {lines.length} activit{lines.length === 1 ? "y" : "ies"}
+                  {subCount ? ` and ${subCount} sub-item${subCount === 1 ? "" : "s"}` : ""} read from the file.
+                  This <b>replaces</b> the {scopeLines.length} line{scopeLines.length === 1 ? "" : "s"} currently
+                  on screen — nothing is written until you press “Save scope lines”.
+                </p>
+              </div>
+
+              {errors.length > 0 && (
+                <div className="lta-import-errs">
+                  <b>{errors.length} row{errors.length === 1 ? "" : "s"} skipped:</b>
+                  <ul>{errors.slice(0, 8).map((m, k) => <li key={k}>{m}</li>)}</ul>
+                  {errors.length > 8 && <span className="lta-hint">…and {errors.length - 8} more.</span>}
+                </div>
+              )}
+
+              <div className="lta-modal-body">
+                <table className="lta-table lta-table--sub">
+                  <thead><tr><th className="lta-c-no">#</th><th>Activity</th><th>Specification</th><th className="lta-c-unit">Unit</th><th className="lta-c-weight">Weight %</th></tr></thead>
+                  <tbody>
+                    {lines.map((r, i) => (
+                      <React.Fragment key={i}>
+                        <tr className="lta-row--parent">
+                          <td className="lta-c-no">{i + 1}</td>
+                          <td>{r.activity}</td>
+                          <td>{r.specification}</td>
+                          <td className="lta-c-unit">{r.unit}</td>
+                          <td className="lta-c-weight">{r.weightPct === "" ? "auto" : fmtWeight(r.weightPct)}</td>
+                        </tr>
+                        {(r.subItems || []).map((si, j) => (
+                          <tr key={`${i}-${j}`} className="lta-sub-summary">
+                            <td className="lta-c-no">{i + 1}.{j + 1}</td>
+                            <td className="lta-preview-sub">{si.name}</td>
+                            <td>{si.description}</td>
+                            <td className="lta-c-unit">{si.unit}</td>
+                            <td className="lta-c-weight">{si.weightPct === "" ? "auto" : fmtWeight(si.weightPct)}</td>
+                          </tr>
+                        ))}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="lta-modal-foot">
+                <button className="lta-btn-ghost" onClick={() => setScopePreview(null)}>Cancel</button>
+                <button className="lta-btn-primary" onClick={applyScopeImport}>
+                  <Upload size={13} /> Replace {scopeLines.length} line{scopeLines.length === 1 ? "" : "s"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <div className="lta-head">
         <h1 className="lta-title">Lead Scope / BOM Templates</h1>
         <p className="lta-sub">Standard scope and materials per project type — used to suggest a starting estimate for a lead.</p>
@@ -575,22 +761,56 @@ export default function LeadTemplatesAdmin() {
               {detailTab === "scope" && (
                 <div className="lta-tab-body">
                   <div className="lta-tab-actions">
-                    <span className="lta-hint">The standard activities suggested for this project type, and the share of project progress each one carries.</span>
-                    <button className="lta-btn-ghost lta-act-right" onClick={resetScopeWeights}
+                    <span className="lta-hint">The standard activities suggested for this project type, the breakdown under each one, and the share of project progress they carry.</span>
+                    <button className="lta-btn-ghost lta-act-right" onClick={downloadScopeTemplate}
+                      title="Download a blank Excel template — one row per activity, Level = Sub for the items under it">
+                      <Download size={13} /> Template
+                    </button>
+                    <button className="lta-btn-ghost" onClick={() => exportScope(scopeLines, detail.projectType)}
+                      disabled={scopeLines.length === 0}
+                      title="Export the scope below to Excel — the same file imports back">
+                      <Download size={13} /> Export
+                    </button>
+                    <button className="lta-btn-ghost" onClick={() => scopeFileRef.current?.click()}
+                      title="Import a scope from Excel — replaces the list below (nothing is saved until you press Save)">
+                      <Upload size={13} /> Import
+                    </button>
+                    <button className="lta-btn-ghost" onClick={resetScopeWeights}
                       title="Unpin every weight and split them evenly again">
                       <RefreshCw size={13} /> Reset weights
                     </button>
                     <button className="lta-btn-ghost" onClick={addScopeLine}><Plus size={13} /> Add line</button>
+                    <input ref={scopeFileRef} type="file" accept=".xlsx,.xls,.csv"
+                      style={{ display: "none" }} onChange={onScopeFilePicked} />
                   </div>
                   <div className="lta-table-wrap">
                     <table className="lta-table">
                       <thead><tr><th className="lta-c-no">#</th><th>Activity</th><th>Category</th><th>Specification</th><th className="lta-c-unit">Unit</th><th className="lta-c-weight">Weight %</th><th>Notes</th><th className="lta-c-act" /></tr></thead>
                       <tbody>
-                        {scopeLines.length === 0 && <tr><td colSpan={8} className="lta-empty">No scope lines. "Add line" to define the standard scope.</td></tr>}
-                        {scopeLines.map((r, i) => (
-                          <tr key={r.id ?? `n${i}`}>
-                            <td className="lta-c-no">{i + 1}</td>
-                            <td><input className="lta-inp" value={r.activity} onChange={e => updScope(i, "activity", e.target.value)} placeholder="Activity" /></td>
+                        {scopeLines.length === 0 && <tr><td colSpan={8} className="lta-empty">No scope lines. "Add line" to define the standard scope, or "Import" to bring a large one in from Excel.</td></tr>}
+                        {scopeLines.map((r, i) => {
+                          const subs = r.subItems || [];
+                          const open = !!expanded[i];
+                          const subTotal = weightSum(namedSubs(r));
+                          const subsOk = subWeightsOk(r);
+                          return (
+                          <React.Fragment key={r.id ?? `n${i}`}>
+                          <tr className={subs.length ? "lta-row--parent" : undefined}>
+                            <td className="lta-c-no">
+                              {/* The toggle sits on the row number so a broken-down
+                                  activity reads as a heading, not another leaf row. */}
+                              <button className="lta-sub-toggle" onClick={() => toggleExpanded(i)}
+                                title={open ? "Hide the breakdown" : subs.length ? `Show ${subs.length} sub-item(s)` : "Add a breakdown"}>
+                                {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                              </button>
+                              {i + 1}
+                            </td>
+                            <td>
+                              <ActivityNameSelect className="lta-inp" value={r.activity}
+                                onChange={v => updScope(i, "activity", v)}
+                                options={activityOptions} register={registerActivity}
+                                placeholder="Select activity…" />
+                            </td>
                             <td><input className="lta-inp" value={r.category} onChange={e => updScope(i, "category", e.target.value)} placeholder="Optional" /></td>
                             <td><input className="lta-inp" value={r.specification} onChange={e => updScope(i, "specification", e.target.value)} placeholder="Optional" /></td>
                             <td className="lta-c-unit"><UnitSelectCell className="lta-inp" value={r.unit} onChange={v => updScope(i, "unit", v)} /></td>
@@ -604,9 +824,101 @@ export default function LeadTemplatesAdmin() {
                                   : "Calculated automatically. Type a value to hold it."} />
                             </td>
                             <td><input className="lta-inp" value={r.notes} onChange={e => updScope(i, "notes", e.target.value)} /></td>
-                            <td className="lta-c-act"><button className="lta-icon-del" onClick={() => rmScopeLine(i)}><Trash2 size={14} /></button></td>
+                            <td className="lta-c-act">
+                              <button className="lta-icon-add" title="Add a sub-item under this activity"
+                                onClick={() => addSubItem(i)}><CornerDownRight size={14} /></button>
+                              <button className="lta-icon-del" onClick={() => rmScopeLine(i)}><Trash2 size={14} /></button>
+                            </td>
                           </tr>
-                        ))}
+                          {/* The collapsed summary is what makes a breakdown findable
+                              at all — otherwise a closed row looks identical to one
+                              that was never broken down. */}
+                          {!open && subs.length > 0 && (
+                            <tr className="lta-sub-summary">
+                              <td />
+                              <td colSpan={7}>
+                                <button className="lta-linkish" onClick={() => toggleExpanded(i)}>
+                                  {subs.length} sub-item{subs.length === 1 ? "" : "s"}
+                                </button>
+                                <span className="lta-hint"> — {namedSubs(r).map(si => si.name).join(", ") || "unnamed"}</span>
+                                {!subsOk && <span className="lta-sub-bad"> · weights total {fmtWeight(subTotal)}%</span>}
+                              </td>
+                            </tr>
+                          )}
+                          {open && (
+                            <tr className="lta-sub-block">
+                              <td />
+                              <td colSpan={7}>
+                                <div className="lta-sub-wrap">
+                                  <div className="lta-sub-head">
+                                    <span className="lta-hint">
+                                      Sub-items under <b>{r.activity.trim() || "this activity"}</b> — each is a share of
+                                      {" "}<b>this activity</b>, so they add up to 100% of it, not of the template.
+                                    </span>
+                                    <button className="lta-btn-ghost lta-act-right" onClick={() => resetSubWeights(i)}
+                                      disabled={subs.length === 0}
+                                      title="Unpin these sub-weights and split them evenly again">
+                                      <RefreshCw size={12} /> Reset
+                                    </button>
+                                    <button className="lta-btn-ghost" onClick={() => addSubItem(i)}>
+                                      <Plus size={12} /> Add sub-item
+                                    </button>
+                                  </div>
+                                  {subs.length === 0 ? (
+                                    <div className="lta-empty lta-sub-empty">
+                                      No breakdown. "Add sub-item" to standardise the work under this activity.
+                                    </div>
+                                  ) : (
+                                    <table className="lta-table lta-table--sub">
+                                      <thead><tr><th className="lta-c-no" /><th>Sub-item</th><th>Description</th><th className="lta-c-unit">Unit</th><th className="lta-c-weight">Weight %</th><th className="lta-c-act" /></tr></thead>
+                                      <tbody>
+                                        {subs.map((si, j) => (
+                                          <tr key={j}>
+                                            <td className="lta-c-no">{i + 1}.{j + 1}</td>
+                                            <td>
+                                              <ActivityNameSelect className="lta-inp" value={si.name}
+                                                onChange={v => updSubItem(i, j, "name", v)}
+                                                options={activityOptions} register={registerActivity}
+                                                placeholder="Select sub-item…" />
+                                            </td>
+                                            <td><input className="lta-inp" value={si.description}
+                                              onChange={e => updSubItem(i, j, "description", e.target.value)} placeholder="Optional" /></td>
+                                            <td className="lta-c-unit">
+                                              <UnitSelectCell className="lta-inp" value={si.unit}
+                                                onChange={v => updSubItem(i, j, "unit", v)} />
+                                            </td>
+                                            <td className="lta-c-weight">
+                                              <input
+                                                className={`lta-inp lta-inp--w${si.weightManual ? " lta-w-pinned" : ""}`}
+                                                type="number" min="0" max="100" step="0.01" value={si.weightPct}
+                                                onChange={e => setSubWeight(i, j, e.target.value)}
+                                                title={si.weightManual
+                                                  ? "Set by you — this weight holds while the others rebalance around it."
+                                                  : "Calculated automatically. Type a value to hold it."} />
+                                            </td>
+                                            <td className="lta-c-act">
+                                              <button className="lta-icon-del" onClick={() => rmSubItem(i, j)}><Trash2 size={13} /></button>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  )}
+                                  {subs.length > 0 && (
+                                    <div className={`lta-weight-total lta-weight-total--sub${subsOk ? " lta-weight-total--ok" : " lta-weight-total--err"}`}>
+                                      <span>Sub-total: <b>{fmtWeight(subTotal)}%</b> of {r.activity.trim() || "this activity"}</span>
+                                      <span className="lta-hint">
+                                        {subsOk ? "Adds up." : "Must add up to 100% of the activity before this template can be saved."}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                          </React.Fragment>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -623,7 +935,6 @@ export default function LeadTemplatesAdmin() {
                   <div className="lta-card-foot"><button className="lta-btn-primary" onClick={saveScope} disabled={savingScope}><Save size={13} /> {savingScope ? "Saving…" : "Save scope lines"}</button></div>
                 </div>
               )}
-
               {/* BOM Lines tab — grouped under each scope activity, like the leads BOM tab */}
               {detailTab === "bom" && (
                 <div className="lta-tab-body">

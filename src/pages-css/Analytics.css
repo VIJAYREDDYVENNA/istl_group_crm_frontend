@@ -267,3 +267,48 @@
   transition: all 0.15s ease;
 }
 .rd-viewmore:hover { background: rgba(91,140,255,0.18); }
+/* ── Scope badge + PDF download ─────────────────────────────────────────────
+   The badge sits inline with the page title and states which slice of the data
+   the viewer is being shown ("All company" / "My team" / "My leads"), driven by
+   the backend's scope field — never by a client-side role check. */
+.anl-scope {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  border: 1px solid transparent;
+  cursor: help;
+}
+.anl-scope--all  { background: rgba(91, 140, 255, 0.12); color: #4a78e0; border-color: rgba(91, 140, 255, 0.28); }
+.anl-scope--team { background: rgba(39, 211, 162, 0.14); color: #17a37c; border-color: rgba(39, 211, 162, 0.30); }
+.anl-scope--self { background: rgba(255, 181, 69, 0.16); color: #b3760d; border-color: rgba(255, 181, 69, 0.34); }
+
+[data-theme="dark"] .anl-scope--all  { color: #8fb0ff; }
+[data-theme="dark"] .anl-scope--team { color: #4fdcb2; }
+[data-theme="dark"] .anl-scope--self { color: #ffc978; }
+
+.anl-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--anl-card-brd);
+  background: var(--anl-chip-bg);
+  color: var(--anl-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+.anl-download:hover:not(:disabled) {
+  background: rgba(91, 140, 255, 0.10);
+  border-color: rgba(91, 140, 255, 0.45);
+}
+.anl-download:active:not(:disabled) { transform: translateY(1px); }
+.anl-download:disabled { opacity: 0.55; cursor: not-allowed; }

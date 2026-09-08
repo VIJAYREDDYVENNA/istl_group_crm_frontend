@@ -22,6 +22,14 @@
  *      row, so a project generated from a template inherits the template's
  *      weights instead of the equal split. Nothing else about the tab's weight
  *      behaviour (auto-distribution, pinning, snapping, validation) changed.
+ *    • loadDefaultPlan() also carries the template's SUB-ITEM breakdown, and is a
+ *      name-matched merge rather than a wholesale replace: a phase or sub-item
+ *      whose name is still in the standard keeps its id, dates, progress and
+ *      budget. This matters because a sub-item has no id anywhere — its name is
+ *      the key for project_progress_periods.sub_item_key and for the planned-
+ *      budget merge in ProjectDetailService.saveScopeBudgets, both of which
+ *      compare with an exact String.equals. A matched row therefore keeps its
+ *      STORED spelling; only description/weight are refreshed from the template.
  * ========================================================================== */
 // ============================================================================
 //  OrderBookDetailPage
@@ -680,11 +688,58 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
   // sub-group (GET /scope/suggest?target=scope), exactly like the Leads page.
   // Only the row SOURCE changed vs the old default-plan: the bucket-distribution
   // across the plan duration below is unchanged, as are all downstream columns.
+  // ── Re-suggest: fold the suggested plan onto what is already here ────────────
+  //
+  // This used to be a wholesale setPhases() with id:null on every row, which made
+  // the next save delete every phase AND its progress periods (they are keyed by
+  // phase_id). Matching by name keeps a phase that is still in the standard, so
+  // its weekly progress, its planned budget and its BOM links survive.
+  //
+  // Sub-items matter even more here: they have no id at all, so their NAME is the
+  // key for project_progress_periods.sub_item_key and for the planned-budget merge
+  // in ProjectDetailService.saveScopeBudgets — which compares with an exact
+  // String.equals. So a matched sub-item keeps its STORED spelling and its
+  // execution fields; only the definition (description/weight) is refreshed.
+  //
+  // Matching is trim + lowercase, the same normalisation the backend's
+  // ProjectLeadSeedService.activityKey uses.
+  const nameKey = (v) => String(v == null ? '' : v).trim().toLowerCase();
+
+  const mergeSuggestedSubs = (prior, incoming) => {
+    const inc = incoming || [];
+    if (!inc.length) return [];
+    const byKey = new Map();
+    (prior || []).forEach(si => {
+      const k = nameKey(si.name);
+      if (k && !byKey.has(k)) byKey.set(k, si); // first wins; duplicate names are possible
+    });
+    return distributeSubWeights(inc.map(si => {
+      const was = byKey.get(nameKey(si.name));
+      const base = {
+        ...blankSubItem(),
+        name: si.name || '',
+        description: si.description || '',
+        weightPct: si.weightPct != null ? Number(si.weightPct) : '',
+        weightManual: si.weightManual === true,
+        customName: !ACTIVITY_OPTIONS.includes(si.name),
+      };
+      if (!was) return base;
+      return {
+        ...was,                                   // status, progress, dates, budget
+        name: was.name,                           // stored spelling is the identity
+        description: si.description || was.description,
+        weightPct: base.weightPct === '' ? was.weightPct : base.weightPct,
+        weightManual: base.weightManual || was.weightManual === true,
+      };
+    }));
+  };
+
   const loadDefaultPlan = async () => {
     if (phases.length) {
       const ok = await showConfirmation({
         title: 'Replace schedule', type: 'alert',
-        message: 'This replaces the current rows with the suggested plan for this sub-group. Continue?',
+        message: 'This replaces the current rows with the suggested plan for this sub-group. '
+          + 'Activities and sub-items whose names still match are kept, along with their progress, dates and budgets. Continue?',
         confirmText: 'Yes, Replace', cancelText: 'Cancel',
       });
       if (!ok) return;
@@ -710,6 +765,13 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
         // suggested rows carry it through instead of falling back to the equal
         // split at save time. The backend guarantees every line has one.
         // Weights stay fully editable here afterwards.
+        // Existing phases by name, so a re-suggest can keep the ones still standard.
+        const priorByKey = new Map();
+        phases.forEach(ph => {
+          const k = nameKey(ph.phaseName);
+          if (k && !priorByKey.has(k)) priorByKey.set(k, ph);
+        });
+
         if (dur > 0 && tmpl.length > 0) {
           mapped = tmpl.map((p, i) => {
             // Phase i spans its proportional slice of [1..dur].
@@ -725,6 +787,26 @@ export const TechnicalTab = ({ orderBook, authHeaders, showSuccess, showError })
             customName: !PHASE_SUGGESTIONS.includes(p.activity),
           }));
         }
+
+        // Carry the template's sub-item breakdown onto each row, and restore
+        // anything a matched phase/sub-item had already accumulated.
+        mapped = mapped.map((row, i) => {
+          const prior = priorByKey.get(nameKey(row.phaseName));
+          const subs = mergeSuggestedSubs(prior ? prior.subItems : [], tmpl[i].subItems);
+          if (!prior) return { ...row, subItems: subs, expanded: false };
+          return {
+            ...prior,                     // id, dates, status, progress, budget
+            seqNo: row.seqNo,
+            phaseName: prior.phaseName,   // stored spelling is the identity
+            phaseDescription: row.phaseDescription || prior.phaseDescription,
+            startWeek: prior.startWeek !== '' && prior.startWeek != null ? prior.startWeek : row.startWeek,
+            endWeek: prior.endWeek !== '' && prior.endWeek != null ? prior.endWeek : row.endWeek,
+            weightPct: row.weightPct === '' ? prior.weightPct : row.weightPct,
+            customName: prior.customName,
+            subItems: subs,
+            expanded: false,
+          };
+        });
         setPhases(mapped);
       }
     } catch { showError('Failed to load suggested plan'); }

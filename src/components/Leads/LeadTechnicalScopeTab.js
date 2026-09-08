@@ -7,19 +7,33 @@
 //    work, technical notes). Group / Sub-group shown read-only from the lead.
 //    "Pull from site visit" fills location/capacity from the site visit report.
 //  • Section B: the scope of work — WHICH activities we will do, chosen from a
-//    dropdown. Deliberately NO dates, NO sub-items, NO weights, NO prices:
-//    scheduling belongs to the project once the lead is won, materials belong
-//    to the BOM tab, and money belongs to Budget Estimation.
+//    dropdown, each optionally broken down into standardised sub-items.
+//    Still deliberately NO dates, NO prices: scheduling belongs to the project
+//    once the lead is won, materials belong to the BOM tab, and money belongs to
+//    Budget Estimation.
+//
+//    Sub-items arrive from the active template via Suggest and are editable
+//    afterwards. Their weights are a share of their OWN parent activity (100%
+//    within it), never of the whole scope — see utils/scopeWeights.js. A
+//    sub-item's NAME is its identity once the lead becomes a project (planned
+//    budgets and weekly progress key off it), which is why names are picked from
+//    the shared list rather than typed freehand.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useEffect, useCallback } from "react";
 import './LeadCardHead.css';
-import { Wand2, Plus, Save, Trash2, Download, ClipboardList, ListChecks } from "lucide-react";
+import {
+  Wand2, Plus, Save, Trash2, Download, ClipboardList, ListChecks, CornerDownRight,
+} from "lucide-react";
 import api from "../../services/leadsapi.js";
 import ConfirmationModal from "../ConfirmationModal.js";
 import useConfirmationModal from "../HandleConfirmationModal.js";
+import { useActivityNames } from "./ActivityNameSelect.js";
+import ScopeSubItemsEditor, {
+  SubItemsSummary, SubItemsToggle, hydrateSubs, subsForSave, namedSubs,
+} from "./ScopeSubItemsEditor.js";
+import { validateWeights } from "../../utils/scopeWeights.js";
 import {
-  ACTIVITY_SUGGESTIONS, DEFAULT_EPC_SCOPE, UNIT_SUGGESTIONS, OTHER_OPTION,
-  SUGGESTION_WARNING_LABELS,
+  DEFAULT_EPC_SCOPE, UNIT_SUGGESTIONS, OTHER_OPTION, SUGGESTION_WARNING_LABELS,
 } from "../../constants/scopeActivities.js";
 import "./LeadTechnicalScopeTab.css";
 
@@ -33,6 +47,9 @@ const emptyHeader = {
 
 const blankRow = () => ({
   id: null, activity: "", specification: "", quantity: "", unit: "kW", customName: false,
+  // Second-level breakdown. Empty = this activity is not broken down, the normal
+  // case; sub-items are opt-in per line.
+  subItems: [],
 });
 
 export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, onRefreshLead, showSuccess, showError }) {
@@ -40,7 +57,9 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
 
   const [header, setHeader] = useState(emptyHeader);
   const [rows, setRows] = useState([]);
-  const [extraSuggestions, setExtraSuggestions] = useState([]);
+  // The shared, user-extensible activity list — one fetch, used by the parent rows
+  // and by every sub-item editor below them.
+  const { options: activityOptions, register: registerActivity } = useActivityNames();
   const [loading, setLoading] = useState(true);
   const [savingHeader, setSavingHeader] = useState(false);
   const [savingRows, setSavingRows] = useState(false);
@@ -58,15 +77,6 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
   const subGroupName = lead?.subGroupName ?? lead?.subGroup ?? "—";
 
   const fail = (msg, e) => { if (!e || e.message !== "SESSION_EXPIRED") showError?.(msg); };
-
-  // Built-in activities + names other users have typed before (shared, backend).
-  const activityOptions = React.useMemo(() => {
-    const merged = [...ACTIVITY_SUGGESTIONS];
-    extraSuggestions.forEach(n => {
-      if (n && !merged.some(m => m.toLowerCase() === n.toLowerCase())) merged.push(n);
-    });
-    return merged;
-  }, [extraSuggestions]);
 
   // Read the lead's latest site visit report (the endpoint returns a list; a lead
   // has at most one). Used to pre-fill Site Location and System Capacity.
@@ -113,6 +123,7 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
           quantity: it.quantity ?? "",
           unit: it.unit || "",
           customName: false, // resolved against the dropdown at render time
+          subItems: hydrateSubs(it.subItems),
         })));
       }
     } catch (e) {
@@ -123,30 +134,12 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
 
   useEffect(() => { load(); }, [load]);
 
-  // Shared, user-contributed activity names. The endpoint returns
-  // {success, data:{names:[...]}} — not a bare array.
-  useEffect(() => {
-    api.get("/order-book/scope-activities")
-      .then(res => {
-        if (Array.isArray(res?.data?.names)) setExtraSuggestions(res.data.names);
-      })
-      .catch(() => {});
-  }, []);
-
   // Does a template exist for this lead's project type? Drives the Load button.
   useEffect(() => {
     api.get(`/leads/${lead.id}/scope/template-info`)
       .then(res => setHasTemplate(!!res?.data?.hasTemplate))
       .catch(() => {});
   }, [lead.id]);
-
-  // Persist a user-typed name so it shows in the dropdown next time, for everyone.
-  const registerActivity = (name) => {
-    const n = (name || "").trim();
-    if (!n || activityOptions.some(m => m.toLowerCase() === n.toLowerCase())) return;
-    setExtraSuggestions(prev => (prev.includes(n) ? prev : [...prev, n]));
-    api.post("/order-book/scope-activities", { name: n }).catch(() => {});
-  };
 
   // ── Header ─────────────────────────────────────────────────────────────────
   const setH = k => e => setHeader(p => ({ ...p, [k]: e.target.value }));
@@ -199,7 +192,69 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
 
   const addRow = () => setRows(prev => [...prev, blankRow()]);
 
+  // Which rows have their breakdown open. UI-only, keyed by row index — the list
+  // is only reordered by add/remove, which re-renders the whole table anyway.
+  const [expanded, setExpanded] = useState({});
+  const toggleExpanded = (i) => setExpanded(e => ({ ...e, [i]: !e[i] }));
+  const setSubs = (i, next) => {
+    updateRow(i, "subItems", next);
+    if (next.length) setExpanded(e => ({ ...e, [i]: true }));
+  };
+
   const removeRow = (i) => { setFocusRow(null); setRows(prev => prev.filter((_, idx) => idx !== i)); };
+
+  // ── Re-suggest: fold the suggestion onto what is already there ──────────────
+  //
+  // A straight replace-all used to give every row id:null, so saving afterwards
+  // soft-deleted every existing line and re-inserted it with a new id. Nothing on
+  // a LEAD keyed off those ids, so that was survivable here — but the same rows
+  // become project phases, where the ids and the sub-item NAMES are what planned
+  // budgets and weekly progress hang off. Matching by name keeps a line that is
+  // still in the standard attached to its own history.
+  //
+  // Matching is trim + lowercase, the same normalisation the backend's
+  // ProjectLeadSeedService.activityKey uses. The STORED spelling is kept on a
+  // match: downstream lookups compare names with an exact equals, so silently
+  // recasing one would detach it.
+  const nameKey = (v) => (v || "").trim().toLowerCase();
+
+  const mergeSuggested = (incoming) => {
+    const byKey = new Map();
+    rows.forEach((r) => {
+      const k = nameKey(r.activity);
+      if (k && !byKey.has(k)) byKey.set(k, r); // first wins, as on the server
+    });
+    return incoming.map((it) => {
+      const prior = byKey.get(nameKey(it.activity));
+      if (!prior) return it;
+      return {
+        ...it,
+        // Keep this line's identity and the values the user already typed; the
+        // suggestion only fills what it actually carries.
+        id: prior.id,
+        activity: prior.activity,
+        specification: it.specification || prior.specification,
+        quantity: prior.quantity !== "" && prior.quantity != null ? prior.quantity : it.quantity,
+        unit: prior.unit || it.unit,
+        subItems: mergeSubs(prior.subItems, it.subItems),
+      };
+    });
+  };
+
+  // Same rule one level down, mirroring the server's ScopeSubItems.merge…().
+  const mergeSubs = (prior, incoming) => {
+    const inc = incoming || [];
+    if (!inc.length) return [];
+    const byKey = new Map();
+    (prior || []).forEach((si) => {
+      const k = nameKey(si.name);
+      if (k && !byKey.has(k)) byKey.set(k, si);
+    });
+    return hydrateSubs(inc.map((si) => {
+      const was = byKey.get(nameKey(si.name));
+      return was ? { ...si, name: was.name, description: si.description || was.description } : si;
+    }));
+  };
 
   const suggestEpcScope = async () => {
     if (rows.length) {
@@ -219,7 +274,8 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
     if (rows.length) {
       const ok = await showConfirmation({
         title: "Replace scope", type: "alert",
-        message: "This replaces the current scope lines with a suggestion from this project type and capacity. Continue?",
+        message: "This replaces the current scope lines with a suggestion from this project type and capacity. "
+          + "Activities and sub-items whose names still match are kept, along with anything already filled in against them. Continue?",
         confirmText: "Yes, Suggest", cancelText: "Cancel",
       });
       if (!ok) return;
@@ -235,13 +291,14 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
         showError?.("No template or similar past job for this project type yet.");
         return;
       }
-      setRows(items.map(it => ({
+      setRows(mergeSuggested(items.map(it => ({
         ...blankRow(),
         activity: it.activity || "",
         specification: it.specification || "",
         quantity: it.quantity ?? "",
         unit: it.unit || "",
-      })));
+        subItems: hydrateSubs(it.subItems),
+      }))));
       setSuggestNote({ source: d.source, sourceCapacity: d.sourceCapacity, warnings: d.warnings || [] });
       showSuccess?.(
         d.source === "MINED"
@@ -257,6 +314,16 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
     if (!canEdit) return;
     for (const r of rows) {
       if (!(r.activity || "").trim()) { showError?.("Every scope line needs an activity"); return; }
+      // Each breakdown is its own 100%, checked per parent so the message can name
+      // the activity to go and fix. Re-checked server-side.
+      const named = namedSubs(r.subItems);
+      if (named.length) {
+        const check = validateWeights(named, (si) => si.name.trim());
+        if (!check.ok) {
+          showError?.(`Under "${r.activity.trim()}": ${check.error.replace(/^Scope weights/, "Sub-item weights")}`);
+          return;
+        }
+      }
     }
     setSavingRows(true);
     try {
@@ -268,6 +335,7 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
           specification: (r.specification || "").trim() || null,
           quantity: r.quantity === "" || r.quantity == null ? null : Number(r.quantity),
           unit: (r.unit || "").trim() || null,
+          subItems: subsForSave(r.subItems),
         })),
       });
       if (res?.success) {
@@ -412,9 +480,18 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
                 // A stored name that isn't in the dropdown still selects cleanly —
                 // it's offered as its own option rather than dumped into free text.
                 const known = activityOptions.includes(row.activity);
+                const subs = row.subItems || [];
+                const open = !!expanded[i];
+                const cols = canEdit ? 6 : 5;
                 return (
-                  <tr key={row.id ?? `new-${i}`}>
-                    <td className="lts-col-num">{i + 1}</td>
+                  <React.Fragment key={row.id ?? `new-${i}`}>
+                  <tr className={subs.length ? "lts-row--parent" : undefined}>
+                    <td className="lts-col-num">
+                      {/* The toggle sits on the row number so a broken-down activity
+                          reads as a heading, not as another leaf row. */}
+                      <SubItemsToggle open={open} count={subs.length} onToggle={() => toggleExpanded(i)} />
+                      {i + 1}
+                    </td>
                     <td>
                       {row.customName ? (
                         <div className="lts-custom">
@@ -462,12 +539,44 @@ export default function LeadTechnicalScopeTab({ lead, currentUser, permissions, 
                     </td>
                     {canEdit && (
                       <td className="lts-col-act">
+                        <button className="lts-icon-add" title="Add a sub-item under this activity"
+                          onClick={() => setSubs(i, [...subs, { name: "", description: "", unit: "", weightPct: "", weightManual: false }])}>
+                          <CornerDownRight size={14} />
+                        </button>
                         <button className="lts-icon-del" title="Remove row" onClick={() => removeRow(i)}>
                           <Trash2 size={14} />
                         </button>
                       </td>
                     )}
                   </tr>
+
+                  {/* Collapsed: one line naming what is inside. Without it a closed
+                      breakdown looks identical to one that was never created. */}
+                  {!open && subs.length > 0 && (
+                    <tr className="lts-row--sub">
+                      <td />
+                      <td colSpan={cols - 1}>
+                        <SubItemsSummary subs={subs} onExpand={() => toggleExpanded(i)} />
+                      </td>
+                    </tr>
+                  )}
+
+                  {open && (
+                    <tr className="lts-row--sub">
+                      <td />
+                      <td colSpan={cols - 1}>
+                        <ScopeSubItemsEditor
+                          subs={subs}
+                          onChange={(next) => updateRow(i, "subItems", next)}
+                          parentName={row.activity}
+                          options={activityOptions}
+                          register={registerActivity}
+                          disabled={!canEdit}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
