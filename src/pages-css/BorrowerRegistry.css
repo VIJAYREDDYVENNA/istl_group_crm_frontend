@@ -416,6 +416,78 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
 .br-banner svg { flex-shrink: 0; margin-top: 2px; }
 .br-banner-warn { background: var(--c-fef3c7, #fef3c7); color: var(--ct-b45309, #b45309); }
 .br-banner-danger { background: var(--c-fee2e2, #fee2e2); color: var(--ct-b91c1c, #b91c1c); }
+.br-banner-info { background: var(--c-eff6ff, #eff6ff); color: var(--ct-1e40af, #1e40af); margin: 12px 0 0; }
+
+/* A brief, self-dismissing (3s) validation message centered on the whole
+   screen — e.g. Sanction Terms' Save-time checks — rather than a
+   persistent inline banner the reviewer would see by default while still
+   filling the form in. Portalled to document.body, so it sits above every
+   modal (including this one) regardless of scroll position. */
+.br-center-toast {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 3000; max-width: 380px; padding: 14px 20px; border-radius: 8px;
+  background: var(--ct-991b1b, #991b1b); color: var(--c-white, #ffffff);
+  font-size: 13px; font-weight: 500; line-height: 1.5; text-align: center;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .28);
+  animation: brCenterToastIn .18s ease-out;
+}
+@keyframes brCenterToastIn {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(.94); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* ── Sanction Terms (Product section) ────────────────────────────────────── */
+.br-terms-card {
+  margin-top: 6px; padding: 16px;
+  background: var(--c-f8fafc, #f8fafc); border: 1px solid var(--c-e5e7eb, #e5e7eb);
+  border-radius: 8px;
+}
+.br-terms-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  margin-bottom: 12px;
+}
+.br-terms-title-row { display: flex; align-items: center; gap: 4px; margin: 0 0 4px; }
+.br-terms-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--ct-111827, #111827); }
+.br-terms-sub { margin: 0; font-size: 12px; color: var(--ct-6b7280, #6b7280); max-width: 520px; }
+.br-terms-table th, .br-terms-table td { white-space: nowrap; }
+.br-terms-table .br-input, .br-terms-table select.br-input { min-width: 120px; }
+.br-terms-delete { color: var(--ct-dc2626, #dc2626); }
+.br-terms-delete:hover { background: var(--c-fee2e2, #fee2e2); }
+.br-terms-delete:disabled { color: var(--ct-cbd5e1, #cbd5e1); cursor: not-allowed; }
+.br-terms-delete:disabled:hover { background: none; }
+.br-terms-summary {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px;
+}
+.br-terms-summary-tile {
+  display: flex; flex-direction: column; gap: 3px; padding: 10px 12px;
+  background: var(--c-white, #ffffff); border: 1px solid var(--c-e5e7eb, #e5e7eb); border-radius: 6px;
+}
+.br-terms-summary-label { font-size: 11px; color: var(--ct-6b7280, #6b7280); }
+.br-terms-summary-value { font-size: 15px; font-weight: 700; color: var(--ct-111827, #111827); }
+.br-terms-info-list { margin: 0; padding-left: 18px; }
+.br-terms-info-list li + li { margin-top: 4px; }
+@media (max-width: 900px) {
+  .br-terms-summary { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Repayment Schedule tab, once Sanction Terms exist — a term dropdown above
+   one term's own schedule at a time (not every term stacked at once).
+   Mirrors .br-schedule-panel's own "fill whatever .br-modal has left" flex
+   sizing (see that class's own comment) since this wrapper now sits between
+   .br-modal and it, replacing the two-column .br-modal-body grid the
+   Sanction Details tab uses — full width, not a form grid. */
+.br-term-schedule-body {
+  flex: 1 1 0; min-height: 0; display: flex; flex-direction: column;
+  padding: 16px 22px 0; overflow: hidden;
+}
+.br-term-schedule-section { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+/* Term dropdown and the "Term N — Facility · Rs. X Cr · Actual Disb. Date"
+   text sit in one row now, not stacked — the dropdown first, sized to its
+   own content rather than stretching full width like every other input. */
+.br-term-schedule-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; flex: none; }
+.br-term-schedule-select { width: auto; min-width: 160px; flex: none; }
+.br-term-schedule-title { font-size: 14px; font-weight: 700; color: var(--ct-111827, #111827); }
+.br-term-schedule-sub { font-size: 12px; color: var(--ct-6b7280, #6b7280); }
 
 .br-empty { text-align: center; padding: 18px 8px; }
 .br-empty p { margin: 0 0 8px; }
@@ -543,6 +615,11 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
   font-size: 12px; font-weight: 400; line-height: 1.5;
   box-shadow: 0 10px 24px rgba(0, 0, 0, .18);
 }
+/* Wide variant for the Sanction Terms rules — a 4-bullet list needs more
+   room than the base popover's 260px before it wraps awkwardly. */
+.br-info-popover-wide { width: 340px; }
+.br-info-popover .br-terms-info-list { margin: 0; padding-left: 16px; }
+.br-info-popover .br-terms-info-list li + li { margin-top: 6px; }
 
 /* Filename of the letter being reviewed, shown at the top of the modal. */
 .br-modal-file { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1110,6 +1187,13 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
 .br-schedule-section-head .br-info-popover { top: auto; left: auto; bottom: calc(100% + 6px); right: 0; }
 .br-schedule-section-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .br-schedule-section-actions .br-btn:disabled { cursor: default; }
+/* The Term dropdown now sits inline right after the title (see
+   RepaymentScheduleSection) instead of the title itself soaking up all the
+   row's flex-grow — so the title reverts to its own width and a trailing
+   spacer takes over stretching, keeping the info icon/actions pinned to the
+   far right exactly as before. */
+.br-schedule-section-head .br-card-title { flex: 0 1 auto; }
+.br-schedule-header-spacer { flex: 1 1 auto; }
 
 /* Export's PDF/Word/Excel picker — same floating-panel shape as
    .br-info-popover, anchored under the trigger button instead of an icon. */
@@ -1135,6 +1219,10 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
    (collapsed state omits it from the DOM entirely) — so a collapsed section
    never shows a stray border/margin under the header with nothing below it. */
 .br-schedule-section .br-schedule-section-head { margin-bottom: 0; border-bottom: none; padding-bottom: 0; }
+/* The read-only Repayment Schedule section's own Term dropdown (Borrower/
+   Group Detail page) — now sits inline in the card header, right after the
+   title, rather than as its own row underneath it. */
+.br-schedule-term-picker { margin: 0; }
 /* Left/right padding zeroed here only — the Borrower Detail page's card
    already supplies its own side padding around this whole section, so the
    modal's 22px (needed there since .br-schedule-panel IS the modal's own
@@ -1196,13 +1284,26 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
 .br-spin { animation: br-spin 1s linear infinite; }
 @keyframes br-spin { to { transform: rotate(360deg); } }
 
-/* The converted .docx, styled to read like the letter it came from. */
+/* The converted .docx, sliced into A4-like page sheets (see DocxPages in
+   DocumentViewerModal.js) so it reads like a real document preview instead
+   of one continuous scrolling block. */
 .br-viewer-doc { flex: 1; overflow-y: auto; padding: 28px 20px 48px; }
-.br-viewer-doc .docx-body {
-  max-width: 760px; margin: 0 auto; padding: 44px 52px;
+.br-doc-pages {
+  display: flex; flex-direction: column; align-items: center; gap: 24px;
+  max-width: 760px; margin: 0 auto;
+}
+.br-doc-page {
+  position: relative; width: 100%;
   background: var(--c-white, #ffffff); border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .1), 0 8px 20px rgba(0, 0, 0, .06);
+}
+.br-doc-page-inner {
+  box-sizing: border-box; padding: 44px 52px;
   font-size: 13.5px; line-height: 1.7; color: var(--ct-111827, #111827);
+}
+.br-doc-page-number {
+  text-align: right; padding: 0 52px 14px;
+  font-size: 11px; color: var(--ct-9ca3af, #9ca3af);
 }
 .br-viewer-doc .docx-p { margin: 0 0 10px; }
 .br-viewer-doc .docx-spacer { margin: 0 0 10px; height: 4px; }
@@ -1427,7 +1528,8 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
   .br-docstrip-actions .br-btn { flex: 1; }
 
   .br-viewer-doc { padding: 12px 8px 32px; }
-  .br-viewer-doc .docx-body { padding: 22px 18px; border-radius: 0; }
+  .br-doc-page { border-radius: 0; }
+  .br-doc-page-inner { padding: 22px 18px; }
   /* A fixed-layout table can't shrink below its content, so let the letter's
      own tables scroll rather than forcing the whole page sideways. */
   .br-viewer-doc .docx-table { display: block; overflow-x: auto; white-space: nowrap; }
@@ -1579,10 +1681,14 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
 .brx-tree-scroll-10::-webkit-scrollbar-thumb:hover, .brx-tree-scroll-5::-webkit-scrollbar-thumb:hover {
   background: var(--c-94a3b8, #94a3b8);
 }
-.brx-tree-scroll-10 { height: 458px; }
-.brx-tree-scroll-5 { height: 248px; }
+/* max-height, not height — a full page (or close to it) still caps at this
+   and scrolls with a fixed pagination-footer position, but a short table
+   (or a short last page) shrinks to fit its actual rows instead of leaving
+   the rest of the card as dead white space. */
+.brx-tree-scroll-10 { max-height: 458px; }
+.brx-tree-scroll-5 { max-height: 248px; }
 @media (max-width: 768px) {
-  .brx-tree-scroll-10, .brx-tree-scroll-5 { height: auto; max-height: 60vh; }
+  .brx-tree-scroll-10, .brx-tree-scroll-5 { max-height: 60vh; }
 }
 /* Keeps the column headers in view while the rows beneath them scroll,
    same as .br-schedule-table thead th elsewhere — a no-op when the table
@@ -1703,7 +1809,7 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
   border-radius: 999px; font-size: 11px; font-weight: 600;
 }
 .brx-status-active { background: var(--c-dcfce7, #dcfce7); color: var(--ct-15803d, #15803d); }
-.brx-status-muted { background: var(--c-f1f5f9, #f1f5f9); color: var(--ct-6b7280, #6b7280); }
+.brx-status-muted { background: var(--c-fee2e2, #fee2e2); color: var(--ct-dc2626, #dc2626); }
 
 /* The one editable Active/Inactive control — a sanction letter's own status.
    Company/Group status pills above stay plain .brx-status-pill (read-only,

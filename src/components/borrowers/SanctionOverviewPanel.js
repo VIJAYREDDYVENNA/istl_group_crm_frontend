@@ -33,12 +33,12 @@ import { exportSchedulePDF, exportScheduleWord, exportScheduleExcel } from './sc
 // VIEW_DSRA_DETAILS / VIEW_ISRA_DETAILS permission. The underlying sanction
 // record and its calculations are untouched; only these cards' row lists
 // are filtered before rendering.
-const DSRA_DETAIL_KEYS = new Set(['dsra', 'dsraAmount', 'derivedDsraAmount']);
-const ISRA_DETAIL_KEYS = new Set(['isra', 'israAmount', 'derivedIsraAmount']);
+export const DSRA_DETAIL_KEYS = new Set(['dsra', 'dsraAmount', 'derivedDsraAmount']);
+export const ISRA_DETAIL_KEYS = new Set(['isra', 'israAmount', 'derivedIsraAmount']);
 
 // Free-text covenant fields read as sentences, not numbers — left-aligning
 // just these keeps every other field's right-aligned number/date look intact.
-const LEFT_ALIGN_KEYS = new Set(['cashSweep', 'dsra', 'isra']);
+export const LEFT_ALIGN_KEYS = new Set(['cashSweep', 'dsra', 'isra']);
 
 // Compact-card default: how many already-filled fields a Sanction Details /
 // Derived Values card shows before "show all" is needed.
@@ -64,10 +64,8 @@ const repaymentFrequencyLabel = (active) => {
 };
 
 /** The derived panel, as data — so it can be filtered like the card beside it. */
-const DERIVED_ROWS = [
+export const DERIVED_ROWS = [
   { key: 'derivedEquityContribution', label: 'Equity contribution' },
-  { key: 'derivedRatioCheck', label: 'Ratio check', tone: (v) => (v === 'Reconciles' ? 'ok' : 'warn') },
-  { key: 'derivedRoiCheck', label: 'ROI check', tone: (v) => (v === 'Reconciles' ? 'ok' : 'warn') },
   { key: 'derivedMoratoriumEnd', label: 'Moratorium ends' },
   { key: 'derivedRepaymentStart', label: 'Repayment starts (modelled)' },
   { key: 'derivedRepaymentEnd', label: 'Repayment ends (modelled)' },
@@ -177,24 +175,19 @@ export const ScheduleExportMenu = ({ view, form, meta }) => {
   );
 };
 
-/** The "Sanction details" card — every field on the letter, in sheet order. */
-export const SanctionDetailsCard = ({ borrower, sanction }) => {
-  const [expanded, setExpanded] = useState(false);
-  const { pagePermissions } = useAuth();
-  const hasDsraPermission = !!pagePermissions?.BARROWER?.includes('VIEW_DSRA_DETAILS');
-  const hasIsraPermission = !!pagePermissions?.BARROWER?.includes('VIEW_ISRA_DETAILS');
-  if (!sanction) {
-    return (
-      <section className="br-card">
-        <header className="br-card-head">
-          <span className="br-dot br-dot-read" aria-hidden="true" />
-          <h2 className="br-card-title">Sanction details</h2>
-        </header>
-        <p className="br-muted">These fill in once a sanction is recorded.</p>
-      </section>
-    );
-  }
-  const allRows = DETAIL_FIELDS.map((f) => ({
+/**
+ * Every SANCTION_FIELDS row, shaped to its display value exactly as the
+ * "Sanction details" card always has (borrowerName's borrower fallback, the
+ * combined ROI + interest-terms sentence, the planned-COD-until-actual
+ * fallback, the moratorium/repayment-frequency labels), DSRA/ISRA-permission
+ * filtered — but WITHOUT the card's own cap/expand/section-flattening, so a
+ * caller that wants these grouped into their own SANCTION_FIELDS `group`
+ * bands (SanctionDetailView's per-section rendering) can do so without
+ * re-deriving any of these values itself.
+ */
+export const buildDetailRows = (borrower, sanction, { hasDsraPermission = false, hasIsraPermission = false } = {}) => {
+  if (!sanction) return [];
+  return DETAIL_FIELDS.map((f) => ({
     ...f,
     value: f.key === 'borrowerName'
       ? (sanction[f.key] || borrower?.borrowerName)
@@ -214,6 +207,26 @@ export const SanctionDetailsCard = ({ borrower, sanction }) => {
     (hasDsraPermission || !DSRA_DETAIL_KEYS.has(f.key))
     && (hasIsraPermission || !ISRA_DETAIL_KEYS.has(f.key))
   ));
+};
+
+/** The "Sanction details" card — every field on the letter, in sheet order. */
+export const SanctionDetailsCard = ({ borrower, sanction }) => {
+  const [expanded, setExpanded] = useState(false);
+  const { pagePermissions } = useAuth();
+  const hasDsraPermission = !!pagePermissions?.BARROWER?.includes('VIEW_DSRA_DETAILS');
+  const hasIsraPermission = !!pagePermissions?.BARROWER?.includes('VIEW_ISRA_DETAILS');
+  if (!sanction) {
+    return (
+      <section className="br-card">
+        <header className="br-card-head">
+          <span className="br-dot br-dot-read" aria-hidden="true" />
+          <h2 className="br-card-title">Sanction details</h2>
+        </header>
+        <p className="br-muted">These fill in once a sanction is recorded.</p>
+      </section>
+    );
+  }
+  const allRows = buildDetailRows(borrower, sanction, { hasDsraPermission, hasIsraPermission });
   const filledRows = allRows.filter((f) => !isBlank(f.value));
   const visibleRows = expanded ? allRows : filledRows.slice(0, CARD_ROW_CAP);
   const canToggle = expanded || filledRows.length > CARD_ROW_CAP || filledRows.length < allRows.length;
@@ -364,11 +377,19 @@ export const DocumentCard = ({ sanction, onOpenDocument, onStartAttach, attachin
  * The Repayment Schedule section — info popover, export menu, the full
  * instalment table. `scheduleView` is `deriveRepaymentSchedule(sanction)`,
  * computed by the caller so this component never needs to know about
- * sanctionDerive.js itself.
+ * sanctionDerive.js itself. `termScheduleViews` (also caller-computed, via
+ * sanctionDerive's buildTermScheduleViews) is one such view per Sanction
+ * Term — when the sanction has any, a Term dropdown picks which one this
+ * section shows, same as SanctionFormModal's own Repayment Schedule tab;
+ * `scheduleView` alone still covers a sanction saved before Sanction Terms
+ * existed, so no sanction ever renders with nothing here.
  */
-export const RepaymentScheduleSection = ({ borrower, sanction, scheduleView }) => {
+export const RepaymentScheduleSection = ({
+  borrower, sanction, scheduleView, termScheduleViews = [],
+}) => {
   const [expanded, setExpanded] = useState(true);
   const [showInfo, setShowInfo] = useState(false);
+  const [selectedTermIndex, setSelectedTermIndex] = useState(0);
   if (!sanction || !scheduleView) {
     return (
       <section className="br-card br-schedule-section">
@@ -380,11 +401,39 @@ export const RepaymentScheduleSection = ({ borrower, sanction, scheduleView }) =
       </section>
     );
   }
+  const terms = sanction.terms || [];
+  const hasTerms = terms.length > 0;
+  const i = hasTerms ? Math.min(selectedTermIndex, terms.length - 1) : -1;
+  const activeTerm = hasTerms ? terms[i] : null;
+  const activeView = hasTerms ? termScheduleViews[i] : scheduleView;
+  const activeForm = hasTerms
+    ? { ...sanction, disbursementDate: activeTerm.actualDisbursementDate, debtAmount: activeTerm.termLimit }
+    : sanction;
   return (
     <section className="br-card br-schedule-section">
       <header className="br-card-head br-schedule-section-head">
         <span className="br-dot br-dot-schedule" aria-hidden="true" />
         <h2 className="br-card-title">Repayment schedule</h2>
+        {expanded && terms.length > 1 && (
+          <div className="br-term-schedule-heading br-schedule-term-picker">
+            <select
+              className="br-input br-term-schedule-select"
+              value={i}
+              onChange={(e) => setSelectedTermIndex(Number(e.target.value))}
+            >
+              {terms.map((t, idx) => (
+                <option key={idx} value={idx}>
+                  {`Term ${idx + 1}`}{t.facilityType ? ` — ${t.facilityType}` : ''}
+                </option>
+              ))}
+            </select>
+            <span className="br-term-schedule-title">
+              Term {i + 1}
+              {activeTerm.facilityType ? ` — ${activeTerm.facilityType}` : ''}
+            </span>
+          </div>
+        )}
+        <span className="br-schedule-header-spacer" aria-hidden="true" />
         <span className="br-info-wrap">
           <button
             type="button"
@@ -404,8 +453,8 @@ export const RepaymentScheduleSection = ({ borrower, sanction, scheduleView }) =
         </span>
         <div className="br-schedule-section-actions">
           <ScheduleExportMenu
-            view={scheduleView}
-            form={sanction}
+            view={activeView}
+            form={activeForm}
             meta={{ borrowerName: borrower?.borrowerName, refNo: sanction.refNo }}
           />
           <button
@@ -420,7 +469,7 @@ export const RepaymentScheduleSection = ({ borrower, sanction, scheduleView }) =
         </div>
       </header>
       {expanded && (
-        <RepaymentScheduleTab view={scheduleView} form={sanction} readOnly paginated tableHeading={null} />
+        <RepaymentScheduleTab view={activeView} form={activeForm} readOnly paginated tableHeading={null} />
       )}
     </section>
   );
