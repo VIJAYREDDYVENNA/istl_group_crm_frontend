@@ -28,7 +28,13 @@
   padding: 24px 28px 48px;
   font-size: 13px;
   color: var(--ct-111827, #111827);
-  background: var(--c-f8fafc, #f8fafc);
+  /* A flat --c-f8fafc read noticeably plainer than the reference's soft,
+     faintly blue-tinted canvas — this keeps the same page-canvas token as
+     its base (light mode still lands within a couple of shades of it, dark
+     mode is untouched since --c-eff6ff only resolves in light mode here)
+     and just washes a gentle blue tint down from the top instead of one
+     flat color. */
+  background: linear-gradient(180deg, var(--c-eff6ff, #eff6ff) 0%, var(--c-f8fafc, #f8fafc) 320px);
   min-height: 100%;
 }
 
@@ -38,13 +44,38 @@
   display: flex; align-items: flex-end; justify-content: space-between;
   gap: 16px; flex-wrap: wrap; margin-bottom: 20px;
 }
-.br-head-text { min-width: 0; }
+/* flex: 1 1 0% (not the default 0 1 auto) — a long borrower name's natural
+   content width otherwise wins the flex-basis negotiation against the hero
+   illustration's own 260px basis, wrapping the illustration to its own row
+   below instead of sharing the header row with it. Starting from a 0 basis
+   makes the title reliably wrap its OWN text first instead. */
+.br-head-text { min-width: 0; flex: 1 1 0%; }
+
+/* Detail header's decorative illustration (GroupHeroArt, BorrowerDetail.js)
+   — now .br-head's second flex child in BOTH branches (company and Group/
+   Sub Group), so its own flex-basis/max-width does the sizing directly;
+   the existing space-between/flex-wrap on .br-head keeps pushing it to the
+   right without any extra wrapper. */
+.br-group-hero {
+  flex: 1 1 260px; max-width: 420px; min-width: 0; height: 118px;
+  border-radius: 14px; overflow: hidden;
+  background: linear-gradient(180deg, var(--c-eff6ff, #eff6ff) 0%, var(--c-dbeafe, #dbeafe) 100%);
+}
+.br-group-hero-art { display: block; width: 100%; height: 100%; }
+@media (max-width: 760px) {
+  .br-group-hero { display: none; }
+}
 
 .br-title {
   margin: 2px 0 0; font-size: 24px; font-weight: 600;
   color: var(--ct-111827, #111827);
 }
 .br-sub { margin: 4px 0 0; font-size: 12px; color: var(--ct-6b7280, #6b7280); }
+.br-sub-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.br-status-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+  margin-right: 5px; flex-shrink: 0;
+}
 .br-crumb-static { margin: 0; font-size: 12px; color: var(--ct-6b7280, #6b7280); }
 
 .br-crumb {
@@ -182,8 +213,14 @@ a.br-btn { text-decoration: none; }
 /* ── cards ──────────────────────────────────────────────────────────────── */
 
 .br-card {
-  background: var(--c-white, #ffffff); border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+  background: var(--c-white, #ffffff); border-radius: 12px;
+  border: 1px solid var(--c-e5e7eb, #e5e7eb);
+  /* Toned down from 0 8px 20px rgba(...,.06) — that wide, soft second layer
+     read as a visible fade/"mask" band wherever a card got cut off by
+     .sr-detail-content's own scroll boundary (see that class's own
+     comment). Smaller spread and lower opacity keeps the card lifted
+     without leaving a noticeable trail past its edge. */
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 4px 10px rgba(15, 23, 42, .04);
   padding: 16px 20px; margin-bottom: 12px;
 }
 .br-card-flush { padding: 0; overflow: hidden; }
@@ -245,16 +282,19 @@ a.br-btn { text-decoration: none; }
   margin: 0; font-size: 13px; color: var(--ct-6b7280, #6b7280); flex-shrink: 0;
   display: inline-flex; align-items: center; gap: 7px;
 }
-.br-dl-icon { display: inline-flex; color: var(--ct-9ca3af, #9ca3af); }
+/* A small blue rounded-square badge, not a bare gray glyph — every Overview
+   card header (Borrower/Project Details, Project Cost & Finance, Limit
+   Terms) shares this class, so fixing it here covers all of them at once. */
+.br-dl-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
+  background: var(--c-dbeafe, #dbeafe); color: var(--ct-1d4ed8, #1d4ed8);
+}
 .br-dl-value {
   margin: 0; font-size: 13px; text-align: right; word-break: break-word;
   color: var(--ct-111827, #111827);
 }
 .br-strong { font-weight: 600; }
-.br-dl-caption {
-  display: block; font-size: 11px; font-weight: 400;
-  color: var(--ct-6b7280, #6b7280); margin-top: 2px;
-}
 
 /* ── tables ─────────────────────────────────────────────────────────────── */
 
@@ -1655,8 +1695,9 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
    language as .brx-table (the sheet view), just without the pinned/banded
    header since there's only one row of columns here. */
 .brx-tree-card {
-  border: 1px solid var(--c-e5e7eb, #e5e7eb); border-radius: 10px;
+  border: 1px solid var(--c-e5e7eb, #e5e7eb); border-radius: 16px;
   overflow: hidden; background: var(--c-white, #fff);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 12px 32px rgba(15, 23, 42, .07);
 }
 .brx-tree-scroll { width: 100%; overflow-x: auto; }
 
@@ -1775,6 +1816,16 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
   display: flex; align-items: center; gap: 8px; color: var(--ct-6b7280, #6b7280);
   min-width: 0; overflow: hidden;
 }
+/* Row-type icon, in its own small colored circle rather than a bare glyph —
+   Parent Group (person-pair) reads as the same blue as its Type badge/pill;
+   a standalone company gets a lock glyph in a soft indigo circle instead of
+   Building2, matching how the reference distinguishes the two at a glance. */
+.brx-tree-row-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+}
+.brx-tree-row-icon-group { background: var(--c-dbeafe, #dbeafe); color: var(--ct-1d4ed8, #1d4ed8); }
+.brx-tree-row-icon-company { background: var(--c-ede9fe, #ede9fe); color: var(--ct-6d28d9, #6d28d9); }
 /* Group names are plain text (dark); company names are the clickable link,
    which keeps its own blue from .brx-ref-link — only its hover underline is
    turned off here, since the row itself already reads as clickable. */
@@ -1899,8 +1950,58 @@ thead .br-serial { color: var(--ct-6b7280, #6b7280); }
 .br-match-status-no { font-weight: 600; color: var(--ct-6b7280, #6b7280); }
 .br-match-status-overall { margin: 6px 0 4px; font-size: 13px; }
 
+/* ── Borrower Master Data (Pages/BorrowerMasterData.js) ───────────────────
+   The page header icon badge, per-row initial avatars, the small "N sub
+   group(s)" count pill, and circular tone-colored action buttons — the few
+   pieces this page needed that no existing component already provided (the
+   3 summary cards reuse .brx-stat, the search box reuses .br-search/
+   .br-filters, the level filter reuses FilterSelect, and the footer reuses
+   Pagination.js, all as-is). Same --c-*/--ct-* token convention as the rest
+   of this file, reusing colors already established elsewhere here rather
+   than inventing new ones. */
+.bmd-header-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 52px; height: 52px; border-radius: 14px; flex-shrink: 0;
+  background: var(--c-dbeafe, #dbeafe); color: var(--ct-1d4ed8, #1d4ed8);
+  /* .br-head is align-items:flex-end (so the title/button baseline together)
+     — override just this child so the icon centers on the title block's
+     height instead of sinking to the row's bottom edge. */
+  align-self: center;
+}
+.bmd-row-name { display: inline-flex; align-items: center; gap: 2px; }
+.bmd-avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  font-size: 12.5px; font-weight: 700; margin-right: 10px;
+  background: var(--c-dbeafe, #dbeafe); color: var(--ct-1d4ed8, #1d4ed8);
+}
+/* Sub Group rows read one level down — a muted neutral circle instead of
+   the Parent Group's blue, same visual demotion .br-mono/.br-muted already
+   use elsewhere for "less prominent" text. */
+.bmd-avatar-sub {
+  width: 26px; height: 26px; font-size: 11px;
+  background: var(--c-f1f5f9, #f1f5f9); color: var(--ct-6b7280, #6b7280);
+}
+.bmd-connector { color: var(--ct-9ca3af, #9ca3af); margin-right: 6px; font-size: 13px; }
+.bmd-pill {
+  display: inline-flex; align-items: center; margin-left: 4px;
+  padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  background: var(--c-eff6ff, #eff6ff); color: var(--ct-2563eb, #2563eb);
+  white-space: nowrap;
+}
+.bmd-action-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 50%; border: none; cursor: pointer;
+  margin-left: 6px; transition: filter .12s ease;
+}
+.bmd-action-btn:hover { filter: brightness(0.96); }
+.bmd-action-add { background: var(--c-eff6ff, #eff6ff); color: var(--ct-2563eb, #2563eb); }
+.bmd-action-edit { background: var(--c-f1f5f9, #f1f5f9); color: var(--ct-6b7280, #6b7280); }
+.bmd-action-delete { background: var(--c-fee2e2, #fee2e2); color: var(--ct-dc2626, #dc2626); }
+
 /* Respect a user's reduced-motion preference for the viewer spinner. */
 @media (prefers-reduced-motion: reduce) {
   .br-spin { animation: none; }
   .br-btn, .br-back, .br-row-click, .br-input { transition: none; }
+  .bmd-action-btn { transition: none; }
 }

@@ -265,6 +265,15 @@ function Sidebar({ isOpen, onClose, collapsed, onToggleCollapse }) {
           // plain document icons used by Reports / OrderBook / Invoices.
           icon: 'M9 12h6M9 9h6m-6 6h3m-6 6h12a1 1 0 001-1V7l-4-4H6a1 1 0 00-1 1v16a1 1 0 001 1z',
         },
+        {
+          name: 'Borrower Master Data',
+          path: '/lender/borrower-master-data',
+          permission: 'LENDER_BORROWERS',
+          // Simple list icon — this page manages plain Group/Sub Group
+          // records, not sanction letters, so it's deliberately distinct
+          // from the document icon above.
+          icon: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+        },
       ],
     },
     {

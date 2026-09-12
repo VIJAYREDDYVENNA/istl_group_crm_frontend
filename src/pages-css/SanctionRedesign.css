@@ -1,9 +1,10 @@
 /* src/pages-css/SanctionRedesign.css
  *
- * Shared visual language for the three sanction screens (Edit Sanction /
- * Review What Was Read modal, and the read-only Sanction Detail view): a
- * left section-nav sidebar plus a single scrolling column of numbered card
- * sections. Every class here is prefixed `sr-` and additive to the existing
+ * Shared visual language for the sanction screens: the Edit Sanction/Review
+ * What Was Read modal (a left section-nav sidebar beside a single scrolling
+ * column of numbered card sections) and the read-only Sanction Detail view
+ * (SanctionDetailView.js — full-width dashboard, no nav, cards grouped into
+ * rows). Every class here is prefixed `sr-` and additive to the existing
  * `.br-*` vocabulary in BorrowerRegistry.css (inputs, buttons, tables,
  * badges, the terms card) — nothing here redefines or overrides a `.br-*`
  * rule, so unrelated Borrower Registry pages that only load that stylesheet
@@ -33,16 +34,18 @@
   padding-left: 2px;
 }
 .sr-nav-link {
-  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
   background: none; border: none; border-left: 2px solid transparent; margin-left: -3px;
-  padding: 7px 9px; font: inherit; font-size: 12.5px; color: var(--ct-6b7280, #6b7280);
-  cursor: pointer; border-radius: 0 6px 6px 0;
+  padding: 8px 10px; font: inherit; font-size: 12.5px; color: var(--ct-6b7280, #6b7280);
+  cursor: pointer; border-radius: 8px;
 }
 .sr-nav-link:hover { color: var(--ct-111827, #111827); background: var(--c-f8fafc, #f8fafc); }
 .sr-nav-link--active {
   color: var(--ct-2563eb, #2563eb); font-weight: 600;
   border-left-color: var(--c-2563eb, #2563eb); background: var(--c-eff6ff, #eff6ff);
 }
+.sr-nav-icon { display: inline-flex; flex-shrink: 0; color: var(--ct-9ca3af, #9ca3af); }
+.sr-nav-link--active .sr-nav-icon { color: var(--ct-2563eb, #2563eb); }
 .sr-nav-num {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10.5px; color: var(--ct-9ca3af, #9ca3af); flex-shrink: 0;
@@ -96,45 +99,125 @@
 .sr-identity-card { margin-bottom: 20px; }
 
 /* ── read-only Sanction Detail view (SanctionDetailView.js) ───────────────
-   Unlike the modal (where .sr-nav sits inside .sr-modal-body's own
-   overflow-y: auto and plain `position: sticky` is enough), this view sits
-   directly in the page, which scrolls as a whole — a sticky nav there
-   scrolls out from under the app's own fixed top bar instead of staying in
-   place. Fixing that means giving the two a bounded height of their own:
-   the nav stays fixed by simply never scrolling (ordinary flex sibling,
-   no sticky needed), while the content column becomes the one thing that
-   scrolls, inside a fixed height matching what's actually left of the
-   viewport under the page's own back-button/title/tabs above it. */
-.sr-detail-shell {
-  display: flex; align-items: flex-start; gap: 28px;
-  height: calc(100vh - 260px); min-height: 360px;
-}
-.sr-detail-shell .sr-nav {
-  position: static; flex: 0 0 200px; align-self: stretch;
-  overflow-y: auto; /* safety net only, if the section list itself ever grows past the shell's height */
-}
+   No left nav on this read-only view (unlike the edit/import modal above,
+   which keeps its own) — plain block flow, the page itself scrolls. */
 .sr-detail-content {
-  display: flex; flex-direction: column; gap: 4px; min-width: 0;
-  flex: 1 1 0; height: 100%; overflow-y: auto; padding-right: 6px;
+  display: flex; flex-direction: column; gap: 16px; min-width: 0;
 }
-.sr-detail-section {
-  padding: 20px 0 26px; border-bottom: 1px solid var(--c-e5e7eb, #e5e7eb);
-  scroll-margin-top: 8px;
+/* No sanction recorded yet — centered in the remaining viewport below the
+   header/tabs, rather than reading as a stray line stuck at the top. */
+.sr-detail-empty {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 40vh; text-align: center;
 }
-.sr-detail-section:last-child { border-bottom: none; }
-.sr-detail-section-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 14px; }
-.sr-detail-section-title { font-size: 14.5px; font-weight: 600; margin: 0; color: var(--ct-111827, #111827); }
-.sr-terms-table-readonly th, .sr-terms-table-readonly td { white-space: nowrap; }
+/* Every section is a bare anchor now — the visual card (either a bespoke
+   dashboard card component or <DetailedSection>) supplies its own border/
+   shadow/padding, so this wrapper carries none of its own and the 16px gap
+   above is the only spacing between sections. */
+.sr-detail-section { scroll-margin-top: 8px; }
+.sr-detail-section > .br-card { margin-bottom: 0; }
+/* This table's own content (short dates/percentages/instrument names) never
+   needs .br-table-list's shared 720px floor (sized for the denser Sanction
+   Letters table) — at that width it never fits the ~580-620px a card gets in
+   the Overview tab's 2-column grid, so .br-table-wrap's overflow-x:auto kept
+   kicking in even at a normal desktop width, reading as the table being cut
+   off rather than intentionally scrollable. A lower, table-specific floor
+   plus tighter cell padding lets it sit inside one card column unscrolled at
+   desktop widths (1440px+), while overflow-x:auto stays as the fallback on
+   anything narrower. (.br-table-list.sr-terms-table-readonly — both classes,
+   so this wins over the shared 720px rule regardless of file load order.) */
+.br-table-list.sr-terms-table-readonly { min-width: 600px; }
+.sr-terms-table-readonly th, .sr-terms-table-readonly td { white-space: nowrap; padding: 10px 10px; }
 
-@media (max-width: 900px) {
-  /* Narrow screens lose the fixed-height/internal-scroll split — the page
-     itself scrolls normally, nav stacked above content as a plain wrapping
-     row, same as the modal's own narrow-screen nav. */
-  .sr-detail-shell { flex-direction: column; height: auto; gap: 0; }
-  .sr-detail-shell .sr-nav {
-    flex: 0 0 auto; align-self: stretch; flex-direction: row; flex-wrap: wrap; gap: 4px 10px;
-    border-left: none; border-bottom: 1px solid var(--c-e5e7eb, #e5e7eb);
-    padding: 0 0 10px; margin-bottom: 16px; overflow-y: visible;
-  }
-  .sr-detail-content { height: auto; overflow-y: visible; padding-right: 0; }
+/* ── Overview tab dashboard cards (SanctionDetailView.js) ─────────────────
+   Additive to .brx-stat/.br-card/.br-dl above — reuses those, doesn't
+   redefine them. .sr-kpi-row is the five-up Sanctioned Amount/Debt:Equity/
+   Repayment Tenor/ROI/Repayment Frequency row; .sr-card-grid-2 pairs
+   Borrower Details and Project Details side by side; .sr-card-grid-3 groups
+   Project Cost & Finance/Limit Terms/Derived Values, and separately the
+   remaining compact cards (Interest & Repayment, Repayment Details,
+   Product, Important Dates, Conditions & Covenants, Status, Additional
+   Information); .sr-dl-2col flows a card's <dl> rows into two columns for a
+   denser card (Project Cost & Finance). */
+.sr-kpi-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  /* margin-bottom deliberately 0 — .sr-detail-content (the section list) is
+     a flex column with its own gap: 16px between every section, which does
+     NOT collapse with a child's own margin, so any margin-bottom here was
+     stacking on top of that and doubling the space before Borrower/Project
+     Details. margin-top stays: gap only applies BETWEEN children, so the
+     very first section (this one, right under the tab strip) still needs
+     its own top spacing. */
+  gap: 14px; margin-top: 20px;
+}
+/* Circular icon badges on the Overview tab's own KPI row only — .brx-stat-icon
+   is shared with the Borrower Registry list page's 4 header stats, which keep
+   their own rounded-square badges (their own reference showed that shape), so
+   this stays scoped to .sr-kpi-row rather than touching the shared rule. */
+.sr-kpi-row .brx-stat-icon { border-radius: 50%; }
+
+/* The Overview KPI cards read noticeably more compact in their own reference
+   than .brx-stat's base sizing (built for the Registry list page's larger 4
+   header stats) — smaller icon, smaller value text, tighter padding/gap, all
+   scoped to .sr-kpi-row so the Registry list page's own cards are untouched. */
+.sr-kpi-row .brx-stat { padding: 13px 15px; gap: 11px; }
+.sr-kpi-row .brx-stat-icon { width: 32px; height: 32px; }
+.sr-kpi-row .brx-stat-value { font-size: 16px; }
+.sr-kpi-row .brx-stat-label { font-size: 11.5px; }
+.sr-kpi-row .brx-stat-sub { font-size: 10.5px; }
+.sr-card-grid-2 {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px; align-items: start;
+}
+/* Belt-and-braces on top of align-items: start above — the actual grid
+   children are the .sr-detail-section wrappers (renderSection in
+   SanctionDetailView.js), not .br-card itself, so this targets them
+   directly to stop the shorter card (e.g. Project Details, 3 rows) from
+   being stretched to match its taller row-mate (Borrower Details, 7 rows)
+   and showing blank space below its own content. */
+.sr-card-grid-2 > .sr-detail-section { align-self: start; height: fit-content; }
+/* Project Cost & Finance / Limit Terms specifically wants the opposite of
+   the rule above — same row height on both cards regardless of which has
+   more content, rather than each sized to its own. Scoped to this one pair
+   (an extra class on its own grid wrapper in SanctionDetailView.js) so
+   Borrower Details/Project Details keeps the no-stretch behavior above. */
+.sr-card-grid-2-equal > .sr-detail-section { align-self: stretch; height: auto; }
+.sr-card-grid-2-equal > .sr-detail-section > .br-card { height: 100%; }
+/* Three-up variant — Project Cost & Finance/Limit Terms/Derived Values, and
+   the compact-cards row below it (Interest & Repayment, Repayment Details,
+   Product, Important Dates, Conditions & Covenants, Status, Additional
+   Information). Same auto-fit/no-stretch-by-default behavior as
+   .sr-card-grid-2 above. 360px (not a narrower floor) deliberately caps
+   this at ~3-4 columns on a normal desktop width rather than letting
+   auto-fit pack 5+ — at 280px, short label/value rows like "Rate of
+   interest" or "Repayment Frequency" wrapped their value across several
+   narrow lines instead of sitting on one or two, reading as far taller and
+   busier than the same field looks in every other 2-column card on this
+   page. */
+.sr-card-grid-3 {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px; align-items: start;
+}
+.sr-card-grid-3 > .sr-detail-section { align-self: start; height: fit-content; }
+.sr-card-grid-3-equal > .sr-detail-section { align-self: stretch; height: auto; }
+.sr-card-grid-3-equal > .sr-detail-section > .br-card { height: 100%; }
+.sr-dl-2col { columns: 2; column-gap: 24px; }
+.sr-dl-2col .br-dl-row { break-inside: avoid; }
+
+/* Icon in a DetailedSection card's own header (Product, Important Dates,
+   Conditions & Covenants, Derived Values, Status, Additional Information,
+   and the full field list under Interest & Repayment's summary cards) —
+   same muted treatment as .br-dl-icon, just sized for a card header. */
+/* Same blue rounded-square badge as .br-dl-icon (BorrowerRegistry.css) —
+   kept as a separate class since DetailedSection.js is a distinct component,
+   but same treatment for visual consistency across every Overview card. */
+.sr-detail-card-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
+  background: var(--c-dbeafe, #dbeafe); color: var(--ct-1d4ed8, #1d4ed8);
+}
+
+@media (max-width: 640px) {
+  .sr-kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sr-dl-2col { columns: 1; }
 }

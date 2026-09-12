@@ -69,16 +69,12 @@ const postFile = async (path, file, failLabel) => {
 };
 
 const borrowerApi = {
-  getAll: async (search, category) => {
+  getAll: async (search) => {
     const qs = new URLSearchParams();
     if (search) qs.set('search', search);
-    if (category) qs.set('category', category);
     const suffix = qs.toString() ? `?${qs}` : '';
     return (await req(`/borrower/getAll${suffix}`)).data || [];
   },
-
-  // Every category on file, not just those on the rows currently shown.
-  getCategories: async () => (await req('/borrower/categories')).data || [],
 
   getById: async (id) => (await req(`/borrower/${id}`)).data,
 
@@ -125,9 +121,12 @@ const borrowerApi = {
   // A sanction associated directly with a Parent Group or Sub Group, not any
   // company — see BorrowerService#saveGroupSanction. Returns the saved
   // sanction wrapper directly (there's no borrower to nest it under).
-  saveGroupSanction: async (groupId, sanction, rawExtracted) =>
+  // groupIdentity: optional { cin, registeredAddress } parsed off the letter
+  // — back-fills an EXISTING group's own blank fields server-side, never
+  // overwriting something already on file (BorrowerService#fillGroupIdentityBlanks).
+  saveGroupSanction: async (groupId, sanction, rawExtracted, groupIdentity) =>
     (await req(`/borrower/groups/${groupId}/sanction/save`, {
-      method: 'POST', body: { sanction, rawExtracted },
+      method: 'POST', body: { sanction, rawExtracted, groupIdentity },
     })).data,
 
   // Sanctions associated directly with one Parent Group or Sub Group —

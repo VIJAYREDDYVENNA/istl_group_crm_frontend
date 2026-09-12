@@ -233,7 +233,7 @@ const BorrowerRegistry = () => {
         <div className="brx-head-text">
           <p className="brx-eyebrow">Lender</p>
           <h1 className="brx-title">Borrower Registry</h1>
-          <p className="brx-subtitle">Manage and compare borrower information</p>
+          <p className="brx-subtitle">Manage and compare borrower information across your portfolio</p>
         </div>
         <div className="brx-head-actions">
           <button type="button" className="brx-btn" onClick={() => setAddBorrower(true)}>

@@ -24,7 +24,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, FileText, Pencil, Plus,
   Building2, Users, Paperclip, Upload, Trash2, AlertTriangle, CalendarClock,
-  Eye, Download, Check,
+  Eye, Download, Check, ChevronRight,
 } from 'lucide-react';
 import borrowerApi from '../../services/borrowerApi';
 import CrmPreloader from '../preLoader';
@@ -62,6 +62,101 @@ const TAB_KEYS = new Set(TABS.map((t) => t.key));
 // this page, Overview and Repayment Schedule alike, so the two never read as
 // two different pickers for the same thing.
 const sanctionOptionLabel = (s) => [s.refNo, s.sanctionDate, s.sanctionedAmount].filter(Boolean).join(' | ');
+
+/**
+ * Soft, monochrome-blue flat illustration (sun, drifting clouds, layered
+ * mountains, wind turbines, grass tufts) for every borrower/group detail
+ * header, company and Group/Sub Group alike. Purely decorative: aria-hidden,
+ * no pointer events, sits behind the header text via normal flex order/
+ * z-index. Not a real site photo/render — just an echo of what these
+ * sanctions actually finance (solar/wind).
+ *
+ * A solar panel used to sit in the foreground here too, but every attempt at
+ * it (skewed hand-plotted polygon, then a rotated <rect>) still read as
+ * distorted/wrong, so it was dropped rather than keep shipping something
+ * that didn't look right — wind turbines alone carry the "renewable energy"
+ * read fine on their own.
+ */
+const GroupHeroArt = () => (
+  <svg
+    className="br-group-hero-art" viewBox="0 0 400 140" preserveAspectRatio="xMidYMid meet"
+    aria-hidden="true" focusable="false"
+  >
+    <defs>
+      <radialGradient id="brxHeroSun" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stopColor="#fdc98f" stopOpacity=".9" />
+        <stop offset="45%" stopColor="#fdc98f" stopOpacity=".55" />
+        <stop offset="100%" stopColor="#fdc98f" stopOpacity="0" />
+      </radialGradient>
+      <linearGradient id="brxHeroHillBack" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor="#e4ecfb" />
+        <stop offset="100%" stopColor="#cddaf3" />
+      </linearGradient>
+      <linearGradient id="brxHeroHillMid" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor="#d3e0f6" />
+        <stop offset="100%" stopColor="#b6cbf0" />
+      </linearGradient>
+      <linearGradient id="brxHeroHillFront" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor="#bfd2f2" />
+        <stop offset="100%" stopColor="#9ebae7" />
+      </linearGradient>
+    </defs>
+
+    {/* Sun — a wide, soft radial glow behind a slightly smaller solid core,
+        feathering out gently instead of ending in a hard edge. */}
+    <circle cx="88" cy="44" r="46" fill="url(#brxHeroSun)" />
+    <circle cx="88" cy="44" r="17" fill="#fbc98b" opacity=".95" />
+
+    <g fill="#eef3fc" opacity=".9">
+      <circle cx="234" cy="36" r="7" />
+      <circle cx="245" cy="31" r="10" />
+      <circle cx="257" cy="36" r="6.5" />
+      <circle cx="48" cy="96" r="5.5" />
+      <circle cx="57" cy="92" r="8" />
+      <circle cx="67" cy="96" r="5" />
+    </g>
+
+    {/* Three smoother, wider rolling-hill silhouettes (long single waves
+        rather than several small bumps) with a soft top-to-bottom gradient
+        each, instead of a single flat tint — reads less "clip-art", closer
+        to the reference's gentle shading. */}
+    <path d="M0 140 L0 100 Q100 48 200 78 T400 70 L400 140 Z" fill="url(#brxHeroHillBack)" />
+    <path d="M0 140 L0 116 Q110 76 220 104 T400 100 L400 140 Z" fill="url(#brxHeroHillMid)" />
+    <path d="M0 140 L0 126 Q120 100 230 120 T400 116 L400 140 Z" fill="url(#brxHeroHillFront)" />
+
+    {/* Three wind turbines at varying heights, each grounded and each with
+        a hub + three evenly-spaced (120°) blades. */}
+    <g stroke="#8fadde" strokeWidth="2" fill="none" strokeLinecap="round">
+      <line x1="300" y1="72" x2="300" y2="132" />
+      <circle cx="300" cy="72" r="2.2" fill="#8fadde" stroke="none" />
+      <line x1="300" y1="72" x2="300" y2="59" />
+      <line x1="300" y1="72" x2="311" y2="78.5" />
+      <line x1="300" y1="72" x2="289" y2="78.5" />
+
+      <line x1="335" y1="48" x2="335" y2="132" />
+      <circle cx="335" cy="48" r="2.4" fill="#8fadde" stroke="none" />
+      <line x1="335" y1="48" x2="335" y2="33" />
+      <line x1="335" y1="48" x2="347.5" y2="55.5" />
+      <line x1="335" y1="48" x2="322.5" y2="55.5" />
+
+      <line x1="368" y1="60" x2="368" y2="132" />
+      <circle cx="368" cy="60" r="2.2" fill="#8fadde" stroke="none" />
+      <line x1="368" y1="60" x2="368" y2="47" />
+      <line x1="368" y1="60" x2="379" y2="66.5" />
+      <line x1="368" y1="60" x2="357" y2="66.5" />
+    </g>
+
+    {/* Small rounded bushes clear of the panel's own footprint (left of its
+        rear leg, and between it and the turbines), then a gently-curved
+        grass line (not a flat rectangle) the whole width of the base. */}
+    <g fill="#7bc79a" opacity=".9">
+      <circle cx="42" cy="130" r="5" />
+      <circle cx="52" cy="132" r="6" />
+      <circle cx="290" cy="131" r="4.5" />
+    </g>
+    <path d="M0 134 Q100 128 200 133 T400 132 V140 H0 Z" fill="#bfe8cf" opacity=".85" />
+  </svg>
+);
 
 /**
  * The "which sanction am I looking at" picker — shared by Overview and
@@ -601,11 +696,20 @@ const BorrowerDetail = () => {
                 <TypeBadge label={kind} />
               </span>
             </h1>
-            <p className="br-sub">
-              {activeGroupSanction
-                ? `${activeGroupSanction.refNo}${activeGroupSanction.sanctionDate ? ` · ${activeGroupSanction.sanctionDate}` : ''}`
-                : 'No sanction letter on file'}
+            <p className="br-sub br-sub-row">
+              {activeGroupSanction ? (
+                <>
+                  {activeGroupSanction.refNo}{activeGroupSanction.sanctionDate ? ` · ${activeGroupSanction.sanctionDate}` : ''}
+                  <span className={`brx-status-pill ${String(activeGroupSanction.activeStatus).toUpperCase() === 'INACTIVE' ? 'brx-status-muted' : 'brx-status-active'}`}>
+                    <span className="br-status-dot" aria-hidden="true" />
+                    {String(activeGroupSanction.activeStatus).toUpperCase() === 'INACTIVE' ? 'Inactive' : 'Active'}
+                  </span>
+                </>
+              ) : 'No sanction letter on file'}
             </p>
+          </div>
+          <div className="br-group-hero" aria-hidden="true">
+            <GroupHeroArt />
           </div>
         </div>
 
@@ -832,44 +936,54 @@ const BorrowerDetail = () => {
 
       <div className="br-head">
         <div className="br-head-text">
-          <button type="button" className="br-crumb" onClick={backToRegistry}>
-            Lender · Borrower Registry
-          </button>
-          {(borrower.parentGroupName || borrower.subGroupName) && (
-            <div className="brx-crumb-path">
-              {borrower.parentGroupName && (
-                borrower.parentGroupId ? (
+          {/* One breadcrumb chain, always three-or-more segments — Lender
+              (static) › Borrower Registry (link) › any Parent/Sub Group the
+              company sits under (link each) › Borrower Details (current,
+              static — the page you're on, not the entity's own name; that
+              already sits right below as the page title). Replaces the old
+              two-segment "Lender · Borrower Registry" button, which never
+              grew a third segment for a standalone company at all. */}
+          <div className="brx-crumb-path">
+            <span>Lender</span>
+            <ChevronRight size={12} className="brx-crumb-sep" aria-hidden="true" />
+            <button type="button" className="brx-crumb-link" onClick={backToRegistry}>
+              Borrower Registry
+            </button>
+            {borrower.parentGroupName && (
+              <>
+                <ChevronRight size={12} className="brx-crumb-sep" aria-hidden="true" />
+                {borrower.parentGroupId ? (
                   <button
                     type="button" className="brx-crumb-link"
                     onClick={() => navigate(`/lender/borrowers/group/${borrower.parentGroupId}`)}
                   >
                     {borrower.parentGroupName}
                   </button>
-                ) : <span>{borrower.parentGroupName}</span>
-              )}
-              {borrower.subGroupName && (
-                <>
-                  <span className="brx-crumb-sep">›</span>
-                  {/* A Sub Group has no page of its own — it's an expandable
-                      section on its Parent Group's page (GroupDetail.js) —
-                      so this always routes to the Parent Group with that
-                      section opened, never to the Sub Group's own id. */}
-                  {(borrower.subGroupId && borrower.parentGroupId) ? (
-                    <button
-                      type="button" className="brx-crumb-link"
-                      onClick={() => navigate(
-                        `/lender/borrowers/group/${borrower.parentGroupId}?openSubGroup=${borrower.subGroupId}`,
-                      )}
-                    >
-                      {borrower.subGroupName}
-                    </button>
-                  ) : <span>{borrower.subGroupName}</span>}
-                </>
-              )}
-              <span className="brx-crumb-sep">›</span>
-              <span className="brx-crumb-current">{borrower.borrowerName}</span>
-            </div>
-          )}
+                ) : <span>{borrower.parentGroupName}</span>}
+              </>
+            )}
+            {borrower.subGroupName && (
+              <>
+                <ChevronRight size={12} className="brx-crumb-sep" aria-hidden="true" />
+                {/* A Sub Group has no page of its own — it's an expandable
+                    section on its Parent Group's page (GroupDetail.js) —
+                    so this always routes to the Parent Group with that
+                    section opened, never to the Sub Group's own id. */}
+                {(borrower.subGroupId && borrower.parentGroupId) ? (
+                  <button
+                    type="button" className="brx-crumb-link"
+                    onClick={() => navigate(
+                      `/lender/borrowers/group/${borrower.parentGroupId}?openSubGroup=${borrower.subGroupId}`,
+                    )}
+                  >
+                    {borrower.subGroupName}
+                  </button>
+                ) : <span>{borrower.subGroupName}</span>}
+              </>
+            )}
+            <ChevronRight size={12} className="brx-crumb-sep" aria-hidden="true" />
+            <span className="brx-crumb-current">Borrower Details</span>
+          </div>
           <h1 className="br-title">
             {borrower.borrowerName}
             {borrower.companyType && borrower.companyType !== 'Standalone' && (
@@ -878,11 +992,27 @@ const BorrowerDetail = () => {
               </span>
             )}
           </h1>
-          <p className="br-sub">
-            {active
-              ? `${active.refNo}${active.sanctionDate ? ` · ${active.sanctionDate}` : ''}`
-              : 'No sanction letter on file'}
+          <p className="br-sub br-sub-row">
+            {active ? (
+              <>
+                {active.refNo}{active.sanctionDate ? ` · ${active.sanctionDate}` : ''}
+                {/* Read-only echo of the same active_status the row-level
+                    SanctionStatusBadge edits (sanctionId, refNo, cin, status
+                    — see the Sanction Letters tab's own use of it above) —
+                    not an editable control here, just the header's own
+                    summary of that same field. */}
+                <span className={`brx-status-pill ${String(active.activeStatus).toUpperCase() === 'INACTIVE' ? 'brx-status-muted' : 'brx-status-active'}`}>
+                  <span className="br-status-dot" aria-hidden="true" />
+                  {String(active.activeStatus).toUpperCase() === 'INACTIVE' ? 'Inactive' : 'Active'}
+                </span>
+              </>
+            ) : 'No sanction letter on file'}
           </p>
+        </div>
+        {/* Same decorative illustration as the group branch above — now on
+            every detail page, not just Group/Sub Group ones. */}
+        <div className="br-group-hero" aria-hidden="true">
+          <GroupHeroArt />
         </div>
       </div>
 

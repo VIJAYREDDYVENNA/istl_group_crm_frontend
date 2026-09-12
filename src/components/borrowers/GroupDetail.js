@@ -488,7 +488,18 @@ const GroupDetail = () => {
         [subId]: { companies: companiesRes.content || [], sanctions, loading: false },
       }));
     } catch (e) {
-      setError(e.message || "Could not load this Sub Group's own companies/sanctions");
+      // "Group not found" here just means this Sub Group no longer exists —
+      // almost always because it (or its parent) was just deleted, most
+      // often by this very reload() (see handleDeleteGroup: the
+      // setSubGroupChildren removing the deleted id hasn't flushed into this
+      // reload's own closure yet, so it can still try to refetch the id it
+      // just deleted). That's an expected side-effect of a successful
+      // delete, not a new problem with the page — surfacing it as a
+      // page-level error banner only confuses what was a clean delete.
+      // Any other failure (network, etc.) still surfaces normally.
+      if (e.message !== 'Group not found') {
+        setError(e.message || "Could not load this Sub Group's own companies/sanctions");
+      }
       setSubGroupChildren((m) => ({
         ...m,
         [subId]: { companies: m[subId]?.companies || [], sanctions: m[subId]?.sanctions || [], loading: false },
@@ -1206,18 +1217,27 @@ const GroupDetail = () => {
             </div>
             <div className="br-modal-body br-modal-body-single">
               <p className="br-confirm-text">
-                {(deleteGroupTarget.companiesCount ?? 0) > 0 || (deleteGroupTarget.subGroupsCount ?? 0) > 0
-                  ? <>
-                      {(deleteGroupTarget.companiesCount ?? 0) > 0 && (
-                        <>The {deleteGroupTarget.companiesCount} compan{deleteGroupTarget.companiesCount === 1 ? 'y' : 'ies'} under it</>
-                      )}
-                      {(deleteGroupTarget.companiesCount ?? 0) > 0 && (deleteGroupTarget.subGroupsCount ?? 0) > 0 && ' and '}
-                      {(deleteGroupTarget.subGroupsCount ?? 0) > 0 && (
-                        <>{deleteGroupTarget.subGroupsCount} Sub Group{deleteGroupTarget.subGroupsCount === 1 ? '' : 's'} (with everything under {deleteGroupTarget.subGroupsCount === 1 ? 'it' : 'them'})</>
-                      )}
-                      {' '}— and every one of their sanction letters and stored documents — will be permanently deleted with it.
-                    </>
-                  : `This ${deleteGroupTargetIsParent ? 'Parent Group' : 'Sub Group'} has no companies under it.`}
+                {(() => {
+                  const sanctions = deleteGroupTarget.sanctionsCount ?? 0;
+                  const companies = deleteGroupTarget.companiesCount ?? 0;
+                  const subGroups = deleteGroupTarget.subGroupsCount ?? 0;
+                  const parts = [];
+                  if (sanctions > 0) {
+                    parts.push(`${sanctions} sanction letter${sanctions === 1 ? '' : 's'} attached directly to it`);
+                  }
+                  if (companies > 0) {
+                    parts.push(`the ${companies} compan${companies === 1 ? 'y' : 'ies'} under it (with their own sanction letters and stored documents)`);
+                  }
+                  if (subGroups > 0) {
+                    parts.push(`${subGroups} Sub Group${subGroups === 1 ? '' : 's'} (with everything under ${subGroups === 1 ? 'it' : 'them'})`);
+                  }
+                  if (parts.length === 0) {
+                    return `This ${deleteGroupTargetIsParent ? 'Parent Group' : 'Sub Group'} has nothing under it.`;
+                  }
+                  const joined = parts.length === 1 ? parts[0]
+                    : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
+                  return `${joined[0].toUpperCase()}${joined.slice(1)} will be permanently deleted with it.`;
+                })()}
               </p>
               <p className="br-muted br-confirm-note">
                 {deleteGroupTargetIsParent

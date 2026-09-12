@@ -287,6 +287,16 @@ const CompanyMatchModal = ({
       onResolvedGroup({
         kind: 'GROUP', hierarchy: { ...hierarchy }, groupName,
         type: subGroupSelected ? 'SUB_GROUP' : 'GROUP',
+        // The letter's own parsed CIN/registered address — HierarchyPicker's
+        // "+ Create new..." inputs already get these via the autoFillRef
+        // effect above, but that only writes into the NEW-group form
+        // fields. When the group picked is an EXISTING one instead, there's
+        // no field for it to land in, so it's carried separately here and
+        // applied server-side (BorrowerService#fillGroupIdentityBlanks) —
+        // only onto that group's currently-blank fields, never overwriting
+        // something already on file.
+        letterCin: parsed?.cin || '',
+        letterRegisteredAddress: parsed?.registeredAddress || '',
       });
       return;
     }

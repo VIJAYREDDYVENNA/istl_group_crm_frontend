@@ -24,11 +24,13 @@ import {
 import SanctionCompareModal from './SanctionCompareModal';
 import RepaymentScheduleTab from './RepaymentScheduleTab';
 import TechnologyGroupDropdowns from './TechnologyGroupDropdowns';
-import { SANCTION_FIELDS as FIELDS, sanctionFieldGroups, FACILITY_TYPE_OPTIONS } from './sanctionFields';
+import {
+  SANCTION_FIELDS as FIELDS, sanctionFieldGroups, FACILITY_TYPE_OPTIONS, getSanctionLimitLabel,
+} from './sanctionFields';
 import { BORROWER_IMPORT_KEYS, CIN_REGEX } from './borrowerFields';
 import { resolveHierarchyGroupId } from './HierarchyPicker';
 import { useSectionNav } from './useSectionNav';
-import { statusLabel, sourceLabel } from './SanctionOverviewPanel';
+import { statusLabel, sourceLabel, FieldInfoHint } from './SanctionOverviewPanel';
 import '../../pages-css/BorrowerRegistry.css';
 import '../../pages-css/SanctionRedesign.css';
 
@@ -53,7 +55,7 @@ const GROUPS = sanctionFieldGroups();
 // they're spliced in here rather than living in sanctionFields.js.
 const NAV_ORDER = [
   'Number', 'Borrower Details', 'Project Details', 'Project Cost & Finance',
-  'Product', 'Sanction Terms', 'Interest & Repayment', 'Important Dates',
+  'Product', 'Limit Terms', 'Interest & Repayment', 'Important Dates',
   'Conditions & Covenants', 'Derived Values', 'Status', 'Additional Information',
 ];
 const NAV_SECTIONS = (() => {
@@ -390,6 +392,14 @@ const stripRoiFromText = (v) => String(v ?? '').replace(RATE_IN_TEXT, ' ').repla
 
 const numFrom = (v) => parseFloat(String(v ?? '').replace(/,/g, '')) || 0;
 
+// Sanction Terms' own Amount box: the "Rs." prefix and the "Amount Rs. Cr's"
+// column header already say the unit is crore, so the typed/shown value
+// itself should be a bare number — some imported terms carry a baked-in
+// "Cr"/"Crore" suffix (see stripRs above); this drops it for just this box
+// without touching stripRs itself (used for every other money field on the
+// form, where that suffix normalization is still wanted).
+const stripCrUnit = (v) => stripRs(v).replace(/\s*(cr\.?|crores?)\s*$/i, '');
+
 /**
  * Product section, "Sanction Terms" table — splits the Limit above across
  * one or more facility tranches. Purely a `terms` array in/out (the parent
@@ -428,16 +438,7 @@ const SanctionTermsCard = ({ terms, limitAmount, onChange, minDate, maxDate }) =
   // deleting the only remaining row would leave no Actual Disb. Date for
   // the repayment schedule (or the backend's own required-field check) to
   // anchor on, so the last row's delete action is simply unavailable.
-  // Removing a term also re-splits the Limit evenly across whatever's left,
-  // same as Add — Term Limit is never a value a reviewer types, only ever
-  // an equal share of the Limit (see the read-only cell below), so it can
-  // never end up wrong or unbalanced after either action.
-  const handleRemove = (idx) => {
-    if (terms.length <= 1) return;
-    const next = terms.filter((_, i) => i !== idx);
-    const amounts = equalSplitTermLimits(limitAmount, next.length);
-    onChange(next.map((t, i) => ({ ...t, termLimit: amounts[i] })));
-  };
+  const handleRemove = (idx) => { if (terms.length > 1) onChange(terms.filter((_, i) => i !== idx)); };
   const updateTerm = (idx, patch) => onChange(terms.map((t, i) => (i === idx ? { ...t, ...patch } : t)));
   // Picking a term's Tentative Disb. Date while its OWN Actual Disb. Date is
   // still blank also seeds Actual with that same date — same rule the
@@ -452,13 +453,13 @@ const SanctionTermsCard = ({ terms, limitAmount, onChange, minDate, maxDate }) =
       <div className="br-terms-head">
         <div>
           <span className="br-terms-title-row">
-            <h4 className="br-terms-title">Sanction Terms</h4>
+            <h4 className="br-terms-title">Limit Terms</h4>
             <span className="br-info-wrap" ref={hintRef}>
               <button
                 type="button"
                 className="br-info-btn"
                 onClick={() => setShowHint((v) => !v)}
-                aria-label="Sanction Terms rules"
+                aria-label="Limit Terms rules"
                 aria-expanded={showHint}
               >
                 <BsInfoCircle size={14} aria-hidden="true" />
@@ -466,7 +467,7 @@ const SanctionTermsCard = ({ terms, limitAmount, onChange, minDate, maxDate }) =
               {showHint && (
                 <div className="br-info-popover br-info-popover-wide" role="tooltip">
                   <ul className="br-terms-info-list">
-                    <li>Term Limit is always an equal share of the Limit above, split across every term — adding or removing a term re-splits it automatically. It isn't a typed value, so no term can end up bigger or smaller than its equal allocation.</li>
+                    <li>When you add a new term, the term amounts are automatically divided equally. You can edit the amount for each term.</li>
                     <li>The sum of all term limits must be equal to the overall limit (100%).</li>
                     <li>Disbursement for all terms must be completed on or before the day before the COD date
                       (e.g., if COD is 01-02-2027, latest disbursement date is 31-01-2027).</li>
@@ -487,9 +488,9 @@ const SanctionTermsCard = ({ terms, limitAmount, onChange, minDate, maxDate }) =
           <table className="br-table-list br-terms-table">
             <thead>
               <tr>
-                <th className="br-center">#</th>
-                <th className="br-right">Term Limit (₹ Cr)</th>
-                <th>Facility Type <span className="br-req" aria-hidden="true">*</span></th>
+                <th className="br-center">Limit</th>
+                <th className="br-right">Amount Rs. Cr's <span className="br-req" aria-hidden="true">*</span></th>
+                <th>Instrument <span className="br-req" aria-hidden="true">*</span></th>
                 <th className="br-right">% of Limit</th>
                 <th className="br-center">Tentative Disb. Date <span className="br-req" aria-hidden="true">*</span></th>
                 <th className="br-center">Actual Disb. Date <span className="br-req" aria-hidden="true">*</span></th>
@@ -499,16 +500,26 @@ const SanctionTermsCard = ({ terms, limitAmount, onChange, minDate, maxDate }) =
             <tbody>
               {terms.map((term, i) => {
                 const pct = limit > 0 ? (numFrom(term.termLimit) / limit) * 100 : 0;
+                // Prefer whatever the backend actually persisted for this row
+                // (SanctionTermWrapper.limitLabel) — falls back to the same
+                // formula computed locally for a term just added client-side
+                // and not saved yet, or a record saved before this column
+                // existed and not yet backfilled.
+                const limitName = term.limitLabel || getSanctionLimitLabel(i);
                 return (
                   <tr key={i}>
-                    <td className="br-center">{i + 1}</td>
-                    <td className="br-right">
-                      {/* Term Limit is computed (equalSplitTermLimits), never
-                          typed — see handleAdd/handleRemove and the Limit-sync
-                          effect above the table's parent. */}
+                    <td className="br-center">{limitName}</td>
+                    <td>
+                      {/* Pre-filled with an equal split when the term is added
+                          (see handleAdd), but a plain editable amount from
+                          then on — % of Limit (next column) recalculates
+                          live off whatever the reviewer types here. */}
                       <div className="br-input-group">
                         <span className="br-input-prefix" aria-hidden="true">Rs.</span>
-                        <input type="text" className="br-input br-input-readonly" readOnly value={term.termLimit} />
+                        <input
+                          type="text" className="br-input" value={stripCrUnit(term.termLimit)}
+                          onChange={(e) => updateTerm(i, { termLimit: stripCrUnit(e.target.value) })}
+                        />
                       </div>
                     </td>
                     <td>
@@ -539,7 +550,7 @@ const SanctionTermsCard = ({ terms, limitAmount, onChange, minDate, maxDate }) =
                     <td className="br-center">
                       <button
                         type="button" className="br-icon-btn br-terms-delete"
-                        onClick={() => handleRemove(i)} aria-label={`Delete term ${i + 1}`}
+                        onClick={() => handleRemove(i)} aria-label={`Delete ${limitName}`}
                         disabled={terms.length <= 1}
                         title={terms.length <= 1 ? 'At least one term is required' : undefined}
                       >
@@ -578,7 +589,6 @@ const SanctionTermsCard = ({ terms, limitAmount, onChange, minDate, maxDate }) =
           </div>
         </div>
       )}
-
     </div>
   );
 };
@@ -843,20 +853,6 @@ const SanctionFormModal = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.terms]);
 
-  // Term Limit is never typed directly (see SanctionTermsCard) — it's always
-  // an equal share of the Limit above, re-split whenever the Limit itself
-  // changes so existing terms never drift from the current figure. Skips a
-  // no-op re-render when every term already holds its correct share (string
-  // comparison, same shape equalSplitTermLimits already returns).
-  useEffect(() => {
-    const terms = form.terms || [];
-    if (!terms.length) return;
-    const amounts = equalSplitTermLimits(form.limitAmount, terms.length);
-    if (terms.every((t, i) => t.termLimit === amounts[i])) return;
-    setForm((f) => ({ ...f, terms: f.terms.map((t, i) => ({ ...t, termLimit: amounts[i] })) }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.limitAmount, form.terms.length]);
-
   const derived = useMemo(
     () => deriveSanction({ ...form, roiPct: statedRoiPct }),
     [form, statedRoiPct],
@@ -928,7 +924,7 @@ const SanctionFormModal = ({
     if (!amortSchedule.length) return '';
     const finalAmortPeriod = amortSchedule[amortSchedule.length - 1];
     const totalAmortPct = amortSchedule.reduce((t, p) => t + (p.repaymentPct || 0), 0);
-    const label = perScheduleViews.length > 1 ? `Term ${idx + 1}: ` : '';
+    const label = perScheduleViews.length > 1 ? `${getSanctionLimitLabel(idx)}: ` : '';
     return finalAmortPeriod.repaymentPct < 0
       ? `${label}Total repayment percentage cannot exceed 100%. Please adjust the repayment percentage in one or more existing terms so that the total is exactly 100%.`
       : Math.abs(100 - totalAmortPct) >= 0.01
@@ -961,11 +957,11 @@ const SanctionFormModal = ({
   const sanctionTermsError = !(form.terms || []).length
     ? 'At least one Sanction Term is required.'
     : termsMissingActual !== -1
-      ? `Term ${termsMissingActual + 1} Actual Disb. Date is required.`
+      ? `${getSanctionLimitLabel(termsMissingActual)} Actual Disb. Date is required.`
       : termsCodViolation
         ? `Each Sanction Term's Actual Disb. Date must fall before the Scheduled COD date (${form.scheduledCod}).`
         : Math.abs(termsTotal - termsLimit) >= 0.01
-          ? `The Sanction Terms must add up to the Limit (₹${termsLimit.toFixed(2)} Cr). Current total: ₹${termsTotal.toFixed(2)} Cr.`
+          ? `The Limit Terms must add up to the Limit (₹${termsLimit.toFixed(2)} Cr). Current total: ₹${termsTotal.toFixed(2)} Cr.`
           : '';
 
   // Project Cost = Debt (the sanctioned amount) + Equity, so any one of
@@ -1240,7 +1236,14 @@ const SanctionFormModal = ({
           const groupId = await resolveHierarchyGroupId(pending.hierarchy);
           if (!groupId) throw new Error('Select or create a Parent Group');
           gTarget = { groupId, groupName: pending.groupName, type: pending.type };
-          saved = await borrowerApi.saveGroupSanction(groupId, sanctionCore, rawExtracted);
+          // Back-fills an EXISTING group's blank CIN/registered address from
+          // the letter (see BorrowerService#fillGroupIdentityBlanks) — a
+          // brand-new group already got these at creation via
+          // resolveHierarchyGroupId's own createGroup call, so this is only
+          // ever consequential for the "picked an existing group" case.
+          saved = await borrowerApi.saveGroupSanction(groupId, sanctionCore, rawExtracted, {
+            cin: pending.letterCin, registeredAddress: pending.letterRegisteredAddress,
+          });
         }
       } else if (!gTarget && !bId) {
         // Plain "attach a sanction to a borrower found/created by typed
@@ -1275,14 +1278,20 @@ const SanctionFormModal = ({
         // sanction row commit or fail together in one transaction — see
         // BorrowerService#saveSanction (2026-09-02 save-flow atomicity fix).
         // Blank fields are simply omitted; the backend never uses a blank
-        // value to erase what's on file. Meaningless for a Group/Sub-Group-level
-        // sanction — a Group's own CIN/address is managed via its own Edit
-        // action, never through a sanction import.
+        // value to erase what's on file. For a Group/Sub-Group-level
+        // sanction (gTarget set here as a prop — this page's own "Import"/
+        // "Add new manually" buttons, not the CompanyMatchModal flow), the
+        // same parsed values instead back-fill the GROUP's own blank
+        // cin/registeredAddress (BorrowerService#fillGroupIdentityBlanks) —
+        // never overwriting something already on the group.
         const identityCin = !gTarget && mode === 'import' ? form.cin.trim() : '';
         const identityRegisteredAddress = !gTarget && mode === 'import' ? form.registeredAddress.trim() : '';
+        const groupIdentity = gTarget && mode === 'import'
+          ? { cin: form.cin?.trim() || '', registeredAddress: form.registeredAddress?.trim() || '' }
+          : undefined;
         const payload = { ...sanctionCore, ...(gTarget ? {} : { borrowerId: bId }) };
         saved = gTarget
-          ? await borrowerApi.saveGroupSanction(gTarget.groupId, payload, rawExtracted)
+          ? await borrowerApi.saveGroupSanction(gTarget.groupId, payload, rawExtracted, groupIdentity)
           : await borrowerApi.saveSanction(payload, rawExtracted, identityCin, identityRegisteredAddress);
       }
 
@@ -1484,15 +1493,11 @@ const SanctionFormModal = ({
                         >
                           {form.terms.map((t, idx) => (
                             <option key={idx} value={idx}>
-                              {`Term ${idx + 1}`}{t.facilityType ? ` — ${t.facilityType}` : ''}
+                              {t.limitLabel || getSanctionLimitLabel(idx)}
                             </option>
                           ))}
                         </select>
                       )}
-                      <span className="br-term-schedule-title">
-                        Term {i + 1}
-                        {term.facilityType ? ` — ${term.facilityType}` : ''}
-                      </span>
                       <span className="br-term-schedule-sub">
                         {term.termLimit ? `Rs. ${term.termLimit} Cr` : '—'}
                         {' · Actual Disb. Date: '}
@@ -1675,7 +1680,7 @@ const SanctionFormModal = ({
                           />
                         ) : f.textarea ? (
                           <textarea
-                            rows={3}
+                            rows={f.rows || 3}
                             value={form[f.key]}
                             onChange={set(f.key)}
                             placeholder={f.placeholder}
@@ -1705,7 +1710,7 @@ const SanctionFormModal = ({
                   </div>
                 )}
 
-                {sec.group === 'Sanction Terms' && (
+                {sec.group === 'Limit Terms' && (
                   <SanctionTermsCard
                     terms={form.terms || []}
                     limitAmount={form.limitAmount}
@@ -1832,38 +1837,6 @@ const SanctionFormModal = ({
         </div>
       </div>
     </div>
-  );
-};
-
-/**
- * The (i) icon a field label carries when it has explanatory hint text —
- * click to reveal, same pattern already used for "Why review this" and the
- * Sanction Terms rules popover, just once per field instead of once per
- * section. Keeps every field's caption out of the layout by default; a
- * reviewer who wants it clicks for it instead of it always taking a line.
- */
-const FieldInfoHint = ({ text, tone = '' }) => {
-  const [show, setShow] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    const onOutside = (e) => { if (ref.current && !ref.current.contains(e.target)) setShow(false); };
-    if (show) document.addEventListener('mousedown', onOutside);
-    return () => document.removeEventListener('mousedown', onOutside);
-  }, [show]);
-  if (!text) return null;
-  return (
-    <span className="br-info-wrap" ref={ref}>
-      <button
-        type="button"
-        className={`br-info-btn${tone ? ` br-tone-${tone}` : ''}`}
-        onClick={() => setShow((v) => !v)}
-        aria-label="More about this field"
-        aria-expanded={show}
-      >
-        <BsInfoCircle size={12} aria-hidden="true" />
-      </button>
-      {show && <div className="br-info-popover" role="tooltip">{text}</div>}
-    </span>
   );
 };
 

@@ -46,6 +46,9 @@
 //   textarea    render as a multi-line box on the sanction form instead of
 //               a single-line input — for a value long enough to need
 //               wrapping (a full clause, not a phrase)
+//   rows        textarea row count on the sanction form — defaults to 3 when
+//               omitted; only worth overriding for a field whose values run
+//               noticeably longer than the rest (e.g. Cash Sweep)
 //   normalize   (v) => v — reshapes every keystroke before it lands in form
 //               state, same convention as borrowerFields.js (e.g. toCin).
 //   maxLength   HTML maxlength on the typeable box, alongside normalize —
@@ -70,7 +73,31 @@ export const FACILITY_TYPE_OPTIONS = [
   { value: 'LC', label: 'Letter of Credit (LC)' },
   { value: 'Cash Credit', label: 'Cash Credit' },
   { value: 'Overdraft (OD)', label: 'Overdraft (OD)' },
+  { value: 'Letter of Comfort (LoC)', label: 'Letter of Comfort (LoC)' },
+  { value: 'Working Capital Loan', label: 'Working Capital Loan' },
 ];
+
+// Sanction Terms table row label — Term 1 is always "Fund Based Limit",
+// every term after it is "Non Fund Based Limit - <roman numeral>" (I, II,
+// III, ...), derived purely from the term's own array position so it
+// updates automatically as terms are added/removed. Never stored — same
+// "computed on every render" treatment as % of Limit above.
+const toRoman = (num) => {
+  const table = [
+    [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+    [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+    [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
+  ];
+  let n = num;
+  let out = '';
+  table.forEach(([value, symbol]) => {
+    while (n >= value) { out += symbol; n -= value; }
+  });
+  return out;
+};
+export const getSanctionLimitLabel = (index) => (
+  index === 0 ? 'Fund Based Limit' : `Non Fund Based Limit - ${toRoman(index)}`
+);
 
 // Declaration order below drives the section-nav order in SanctionFormModal
 // (via sanctionFieldGroups()) — 01 Number … 12 Additional Information, with
@@ -106,8 +133,6 @@ export const SANCTION_FIELDS = [
     hint: "The borrower's own CIN, from its company record." },
   { key: 'projectName', group: 'Borrower Details', label: 'Project',
     kind: 'text', placeholder: '50 MWac ground-mounted solar', width: 200 },
-  { key: 'category', group: 'Borrower Details', label: 'Category',
-    kind: 'text', placeholder: 'Utility-Scale Solar', width: 150 },
   // Borrower-owned, not a sanction column — same treatment as `cin` above.
   // Deliberately NOT bound to borrower_sanctions.location: that's a
   // separate, genuinely independent per-sanction/project value (it can
@@ -134,9 +159,9 @@ export const SANCTION_FIELDS = [
   // Group / Sub Group: rendered by TechnologyGroupDropdowns (SanctionFormModal),
   // not the generic field loop — formHidden keeps them out of it while still
   // participating in EMPTY/load/save via the FIELDS-driven reduce.
-  { key: 'projectGroup', group: 'Project Details', label: 'Group',
+  { key: 'projectGroup', group: 'Project Details', label: 'Category',
     kind: 'text', formHidden: true },
-  { key: 'projectSubGroup', group: 'Project Details', label: 'Sub Group',
+  { key: 'projectSubGroup', group: 'Project Details', label: 'Sub Category',
     kind: 'text', formHidden: true },
 
   // State is the borrower's, not the sanction's — the registry column reads it
@@ -289,21 +314,20 @@ export const SANCTION_FIELDS = [
   { key: 'avgDscr', group: 'Conditions & Covenants', label: 'Avg. DSCR (x)',
     kind: 'multiple', placeholder: '1.15x', align: 'right', width: 100,
     hint: 'The average across the complete loan tenor, not any single year.' },
-  { key: 'dsra', group: 'Conditions & Covenants', label: 'DSRA',
-    kind: 'text', textarea: true, placeholder: "One quarter's debt service", width: 170 },
-  // Auto-filled from the DSRA requirement above and the repayment schedule
+  // Auto-filled from the DSRA requirement below and the repayment schedule
   // (see the gap-fill effect in SanctionFormModal, mirroring how
   // debtAmount/equityAmount pre-fill), but a real, persisted, editable
   // field — not derived-only — so a reviewer can type over it with the
   // figure the letter actually states, if that differs from the
   // calculation. Clearing the box back to empty resumes auto-calculation.
+  // Placed beside ISRA Amount (both money fields) so the two figures sit
+  // side by side, with their own DSRA/ISRA description fields as a second
+  // side-by-side pair right after.
   { key: 'dsraAmount', group: 'Conditions & Covenants', label: 'DSRA Amount (Cr)',
     kind: 'money', align: 'right', width: 140, listHidden: true,
-    hint: 'Auto-filled from the DSRA requirement above and the repayment schedule — edit to override.' },
-  { key: 'isra', group: 'Conditions & Covenants', label: 'ISRA',
-    kind: 'text', textarea: true, placeholder: 'As printed in the letter', width: 170 },
-  // Same auto-fill/editable split as DSRA above. When the letter has no
-  // separate ISRA clause, the auto-filled suggestion is the interest
+    hint: 'Auto-filled from the DSRA requirement below and the repayment schedule — edit to override.' },
+  // Same auto-fill/editable split as DSRA Amount above. When the letter has
+  // no separate ISRA clause, the auto-filled suggestion is the interest
   // component of the DSRA calculation instead — never implying a separate
   // contractual requirement unless the letter actually states one (see
   // israIsContractual on the derived panel / SanctionFormModal's hint
@@ -311,8 +335,12 @@ export const SANCTION_FIELDS = [
   { key: 'israAmount', group: 'Conditions & Covenants', label: 'ISRA Amount (Cr)',
     kind: 'money', align: 'right', width: 140, listHidden: true,
     hint: 'Auto-filled. If ISRA is not separately stated, this is the interest component of the DSRA calculation.' },
+  { key: 'dsra', group: 'Conditions & Covenants', label: 'DSRA',
+    kind: 'text', textarea: true, placeholder: "One quarter's debt service", width: 170 },
+  { key: 'isra', group: 'Conditions & Covenants', label: 'ISRA',
+    kind: 'text', textarea: true, placeholder: 'As printed in the letter', width: 170 },
   { key: 'cashSweep', group: 'Conditions & Covenants', label: 'Cash Sweep',
-    kind: 'text', textarea: true, wide: true, placeholder: '100% above 1.30x DSCR', width: 300 },
+    kind: 'text', textarea: true, wide: true, rows: 6, placeholder: '100% above 1.30x DSCR', width: 300 },
 
   // ── 12 Additional Information ──
   { key: 'plfPct', group: 'Additional Information', label: 'PLF (%)',
