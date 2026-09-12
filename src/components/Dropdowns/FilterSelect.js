@@ -82,13 +82,22 @@ const FilterSelect = ({ value, onChange, options = [], placeholder = 'Select', d
     let left = isSearchable ? rect.right - width : rect.left;
     left = Math.max(MARGIN, Math.min(left, viewportW - width - MARGIN));
 
-    setListPos({
+    const next = {
       left,
       width,
       openUp,
       maxHeight: listHeight,
       top:    openUp ? rect.top - listHeight - 4 : rect.bottom + 4,
-    });
+    };
+    // Skip the update when nothing actually moved. A scroll/resize listener
+    // firing dozens of times during one gesture is normal, but re-rendering
+    // (and so re-applying the list's inline style) on every one of those
+    // ticks when the trigger hasn't moved is not — see the effect above for
+    // why re-applying that style mid-scroll matters.
+    setListPos(prev => (
+      prev.left === next.left && prev.width === next.width && prev.openUp === next.openUp &&
+      prev.maxHeight === next.maxHeight && prev.top === next.top
+    ) ? prev : next);
   }, [filteredOptions.length, isSearchable]);
 
   const handleOpen = () => {
@@ -107,10 +116,20 @@ const FilterSelect = ({ value, onChange, options = [], placeholder = 'Select', d
     }
   }, [open, isSearchable]);
 
-  // Recalculate on scroll / resize while open
+  // Recalculate on scroll / resize while open. Scroll events don't bubble,
+  // but a capturing window listener still fires for them regardless of
+  // origin — including the portal list's own internal scroll (it's
+  // overflowY: auto). Without the contains() check below, every wheel/
+  // trackpad tick inside the list re-ran calcPosition() and re-applied the
+  // <ul>'s inline style (maxHeight/overflowY) to the very element being
+  // scrolled, which interrupted the browser's native scroll: the scrollbar
+  // would appear on open but scrolling itself did nothing.
   useEffect(() => {
     if (!open) return;
-    const update = () => calcPosition();
+    const update = (e) => {
+      if (listRef.current?.contains(e.target)) return;
+      calcPosition();
+    };
     window.addEventListener('scroll', update, true);
     window.addEventListener('resize', update, true);
     return () => {

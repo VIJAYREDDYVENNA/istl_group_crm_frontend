@@ -36,21 +36,21 @@ const TechnologyGroupDropdowns = ({ groupValue, subGroupValue, onGroupChange, on
   return (
     <div className="br-form-grid">
       <label className="br-field">
-        <span className="br-field-label">Group</span>
+        <span className="br-field-label">Category</span>
         <FilterSelect
           value={groupValue || ''}
           options={groups}
-          placeholder={loadingGroups ? 'Loading...' : 'Select Group'}
+          placeholder={loadingGroups ? 'Loading...' : 'Select Category'}
           disabled={loadingGroups}
           onChange={onGroupChange}
         />
       </label>
       <label className="br-field">
-        <span className="br-field-label">Sub Group</span>
+        <span className="br-field-label">Sub Category</span>
         <FilterSelect
           value={subGroupValue || ''}
           options={subGroups}
-          placeholder={!groupValue ? 'Select Group First' : loadingSubGroups ? 'Loading...' : 'Select Sub Group'}
+          placeholder={!groupValue ? 'Select Category First' : loadingSubGroups ? 'Loading...' : 'Select Sub Category'}
           disabled={!groupValue || loadingSubGroups}
           onChange={onSubGroupChange}
         />

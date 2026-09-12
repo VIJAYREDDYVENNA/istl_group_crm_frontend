@@ -47,6 +47,7 @@ import ProjectDetailPage from "./components/projects/ProjectDetailPage.js";
 import Tenders from "./Pages/Tenders.js";
 import OrdersInLine from "./Pages/OrdersInLine.js"; // PROVISIONAL — temporary register, see file header
 import BorrowerRegistry from "./Pages/BorrowerRegistry.js";
+import BorrowerMasterData from "./Pages/BorrowerMasterData.js";
 import BorrowerDetail from "./components/borrowers/BorrowerDetail.js";
 import GroupDetail from "./components/borrowers/GroupDetail.js";
 import SanctionDetail from "./components/borrowers/SanctionDetail.js";
@@ -272,6 +273,10 @@ function AppShell({ hideShell }) {
               from a link that also matches the index path. */}
           <Route path="/lender/borrowers" element={
             <ProtectedRoute><BorrowerRegistry /></ProtectedRoute>
+          } />
+
+          <Route path="/lender/borrower-master-data" element={
+            <ProtectedRoute><BorrowerMasterData /></ProtectedRoute>
           } />
 
           <Route path="/lender/borrowers/:id" element={

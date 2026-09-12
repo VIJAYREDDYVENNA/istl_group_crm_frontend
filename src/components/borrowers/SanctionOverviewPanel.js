@@ -24,7 +24,7 @@ import { BsInfoCircle } from 'react-icons/bs';
 import borrowerApi from '../../services/borrowerApi';
 import { useAuth } from '../../hooks/useAuth';
 import RepaymentScheduleTab from './RepaymentScheduleTab';
-import { SANCTION_FIELDS } from './sanctionFields';
+import { SANCTION_FIELDS, getSanctionLimitLabel } from './sanctionFields';
 import { REPAYMENT_FREQUENCIES } from './sanctionDerive';
 import { exportSchedulePDF, exportScheduleWord, exportScheduleExcel } from './scheduleExport';
 
@@ -53,7 +53,7 @@ const DETAIL_FIELDS = SANCTION_FIELDS.filter((f) => !f.detailHidden);
 export const isBlank = (v) => v === null || v === undefined || String(v).trim() === '';
 
 /** Same friendly labelling the sanction form's dropdown uses, for the read-only view. */
-const repaymentFrequencyLabel = (active) => {
+export const repaymentFrequencyLabel = (active) => {
   const found = REPAYMENT_FREQUENCIES.find((f) => f.value === active.repaymentFrequency);
   if (!found) return active.repaymentFrequency;
   if (found.value === 'OTHER') {
@@ -90,6 +90,40 @@ export const sourceLabel = (s) => ({
   IMPORTED_EDITED: 'Imported, edited',
 }[s] || s);
 
+/**
+ * The (i) icon a field label carries when it has explanatory hint text —
+ * click to reveal, same pattern already used in the edit form (SanctionFormModal.js)
+ * for "Why review this" and the Sanction Terms rules popover, just once per
+ * field instead of once per section. Keeps every field's caption out of the
+ * layout by default; a reader who wants it clicks for it instead of it
+ * always taking a line — shared here (rather than staying local to the edit
+ * form) so the read-only Row below can use the exact same pattern.
+ */
+export const FieldInfoHint = ({ text, tone = '' }) => {
+  const [show, setShow] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const onOutside = (e) => { if (ref.current && !ref.current.contains(e.target)) setShow(false); };
+    if (show) document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, [show]);
+  if (!text) return null;
+  return (
+    <span className="br-info-wrap" ref={ref}>
+      <button
+        type="button"
+        className={`br-info-btn${tone ? ` br-tone-${tone}` : ''}`}
+        onClick={() => setShow((v) => !v)}
+        aria-label="More about this field"
+        aria-expanded={show}
+      >
+        <BsInfoCircle size={12} aria-hidden="true" />
+      </button>
+      {show && <div className="br-info-popover" role="tooltip">{text}</div>}
+    </span>
+  );
+};
+
 export const Row = ({
   label, value, strong = false, tone = '', empty = '—',
   mono = false, icon = null, align = '', caption = null,
@@ -98,6 +132,7 @@ export const Row = ({
     <dt className="br-dl-label">
       {icon && <span className="br-dl-icon">{icon}</span>}
       {label}
+      <FieldInfoHint text={caption} />
     </dt>
     <dd className={[
       'br-dl-value',
@@ -107,7 +142,6 @@ export const Row = ({
       align === 'left' ? 'brx-dl-value-left' : '',
     ].filter(Boolean).join(' ')}>
       {value || empty}
-      {value && caption && <span className="br-dl-caption">{caption}</span>}
     </dd>
   </div>
 );
@@ -392,13 +426,9 @@ export const RepaymentScheduleSection = ({
   const [selectedTermIndex, setSelectedTermIndex] = useState(0);
   if (!sanction || !scheduleView) {
     return (
-      <section className="br-card br-schedule-section">
-        <header className="br-card-head br-schedule-section-head">
-          <span className="br-dot br-dot-schedule" aria-hidden="true" />
-          <h2 className="br-card-title">Repayment schedule</h2>
-        </header>
+      <div className="sr-detail-empty">
         <p className="br-muted">Nothing to show until a sanction is recorded.</p>
-      </section>
+      </div>
     );
   }
   const terms = sanction.terms || [];
@@ -423,14 +453,10 @@ export const RepaymentScheduleSection = ({
             >
               {terms.map((t, idx) => (
                 <option key={idx} value={idx}>
-                  {`Term ${idx + 1}`}{t.facilityType ? ` — ${t.facilityType}` : ''}
+                  {t.limitLabel || getSanctionLimitLabel(idx)}
                 </option>
               ))}
             </select>
-            <span className="br-term-schedule-title">
-              Term {i + 1}
-              {activeTerm.facilityType ? ` — ${activeTerm.facilityType}` : ''}
-            </span>
           </div>
         )}
         <span className="br-schedule-header-spacer" aria-hidden="true" />
